@@ -46,10 +46,12 @@ if gj.exists():
     gj.write_text(json.dumps(data, indent=2), encoding="utf-8")
     print("[patched] External/MonoMod/global.json rollForward -> latestFeature")
 PYEOF
-for proj in \
-  src/MonoMod.RuntimeDetour/MonoMod.RuntimeDetour.csproj \
-  src/MonoMod.Patcher/MonoMod.Patcher.csproj; do
-  dotnet build "$proj" -c Release -f net8.0 -noAutoRsp
+for tfm in net8.0 netstandard2.0; do
+  for proj in \
+    src/MonoMod.RuntimeDetour/MonoMod.RuntimeDetour.csproj \
+    src/MonoMod.Patcher/MonoMod.Patcher.csproj; do
+    dotnet build "$proj" -c Release -f "$tfm" -noAutoRsp
+  done
 done
 popd >/dev/null
 

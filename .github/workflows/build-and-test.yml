@@ -27,9 +27,9 @@ jobs:
           chmod +x RepairPatches/build_lemon_repaired.sh
           set -o pipefail
           if ! bash RepairPatches/build_lemon_repaired.sh "$RUNNER_TEMP/lemon_build" "$GITHUB_WORKSPACE/melon_data_repaired.zip" > "$RUNNER_TEMP/build.log" 2>&1; then
-            cat "$RUNNER_TEMP/build.log"
             MSG="$(tail -n 30 "$RUNNER_TEMP/build.log" | tr '\n' ' ' | cut -c 1-3500)"
             echo "::error::$MSG"
+            cat "$RUNNER_TEMP/build.log"
             exit 1
           fi
           cat "$RUNNER_TEMP/build.log"
@@ -66,9 +66,9 @@ jobs:
           set -o pipefail
           for proj in Core/MelonLoader.Installer.Core.csproj Cli/MelonLoader.Installer.Cli.csproj Tests/MelonLoader.Installer.Tests.csproj; do
             if ! dotnet build "$proj" -c Release > "$RUNNER_TEMP/testbuild.log" 2>&1; then
-              cat "$RUNNER_TEMP/testbuild.log"
               MSG="$(tail -n 30 "$RUNNER_TEMP/testbuild.log" | tr '\n' ' ' | cut -c 1-3500)"
               echo "::error::$MSG"
+              cat "$RUNNER_TEMP/testbuild.log"
               exit 1
             fi
           done
@@ -78,9 +78,9 @@ jobs:
           REPAIRED_MELON_DATA: ${{ github.workspace }}/melon_data_repaired.zip
         run: |
           if ! dotnet test Tests/MelonLoader.Installer.Tests.csproj -c Release --no-build --verbosity normal > "$RUNNER_TEMP/test.log" 2>&1; then
-            cat "$RUNNER_TEMP/test.log"
             MSG="$(tail -n 30 "$RUNNER_TEMP/test.log" | tr '\n' ' ' | cut -c 1-3500)"
             echo "::error::$MSG"
+            cat "$RUNNER_TEMP/test.log"
             exit 1
           fi
           cat "$RUNNER_TEMP/test.log"
@@ -124,12 +124,14 @@ jobs:
         run: |
           $out = dotnet publish App/MelonLoader.Installer.App.csproj -f net8.0-windows10.0.19041.0 -c Release -r win-x64 --self-contained true -p:WindowsAppSDKSelfContained=true -o publish_win_app 2>&1
           $code = $LASTEXITCODE
-          $out | Write-Host
           if ($code -ne 0) {
-            $tail = ($out | Select-Object -Last 30) -join " "
+            $tail = (($out | Select-Object -Last 30) -join " ")
+            if ($tail.Length -gt 3500) { $tail = $tail.Substring(0, 3500) }
             Write-Host "::error::$tail"
+            $out | Write-Host
             exit $code
           }
+          $out | Write-Host
 
       - name: Verify Windows standalone package & run CLI verification
         shell: pwsh
