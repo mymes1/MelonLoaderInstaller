@@ -46,7 +46,7 @@ if gj.exists():
     gj.write_text(json.dumps(data, indent=2), encoding="utf-8")
     print("[patched] External/MonoMod/global.json rollForward -> latestFeature")
 PYEOF
-for tfm in net8.0 netstandard2.0; do
+for tfm in net6.0 net8.0 netstandard2.0; do
   for proj in \
     src/MonoMod.RuntimeDetour/MonoMod.RuntimeDetour.csproj \
     src/MonoMod.Patcher/MonoMod.Patcher.csproj; do
