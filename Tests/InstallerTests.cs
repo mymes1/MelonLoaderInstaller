@@ -426,7 +426,7 @@ public sealed class InstallerTests : IDisposable
 
         using MemoryStream ms = new();
         using var writer = new AssetsFileWriter(ms);
-        assetsFile.Write(writer);
+        assetsFile.Write(writer, 0, [], null!);
         return ms.ToArray();
     }
 }
