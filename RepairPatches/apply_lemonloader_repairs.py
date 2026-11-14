@@ -1511,7 +1511,7 @@ fn detour_inner(name: *const c_char) -> Result<*mut Il2CppDomain, DynErr> {
 
     let (trampoline_fn, hook_target) = {
         let guard = INIT_HOOK.try_read()?;
-        let fn_ptr: InitFnIl2Cpp = *guard;
+        let fn_ptr: InitFnIl2Cpp = **guard;
         (fn_ptr, guard.target)
     };
 
@@ -1633,7 +1633,7 @@ fn detour_inner(
 ) -> Result<*mut Il2CppObject, DynErr> {
     let (trampoline_fn, hook_target) = {
         let guard = INVOKE_HOOK.try_read()?;
-        let fn_ptr: InvokeFnIl2Cpp = *guard;
+        let fn_ptr: InvokeFnIl2Cpp = **guard;
         (fn_ptr, guard.target)
     };
 
