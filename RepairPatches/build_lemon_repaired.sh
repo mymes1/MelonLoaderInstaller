@@ -80,9 +80,10 @@ export CXX_aarch64_linux_android="$TOOLCHAIN_BIN/aarch64-linux-android24-clang++
 export AR_aarch64_linux_android="$TOOLCHAIN_BIN/llvm-ar"
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$TOOLCHAIN_BIN/aarch64-linux-android24-clang"
 
-rustup target add aarch64-linux-android
+RUST_TOOLCHAIN="${LEMON_RUST_TOOLCHAIN:-1.81.0}"
+rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target aarch64-linux-android
 pushd "$ML_DIR" >/dev/null
-cargo build --release --target aarch64-linux-android -p Bootstrap -p main
+cargo +"$RUST_TOOLCHAIN" build --release --target aarch64-linux-android -p Bootstrap -p main
 popd >/dev/null
 
 echo "[6/7] Fetching official .NET 8.0.6 linux-bionic-arm64 runtime + BaseLibs..."
