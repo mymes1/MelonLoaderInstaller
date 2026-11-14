@@ -26,12 +26,13 @@ jobs:
         run: |
           chmod +x RepairPatches/build_lemon_repaired.sh
           set -o pipefail
-          if ! bash RepairPatches/build_lemon_repaired.sh "$RUNNER_TEMP/lemon_build" "$GITHUB_WORKSPACE/melon_data_repaired.zip" 2>&1 | tee "$RUNNER_TEMP/build.log"; then
-            tail -n 60 "$RUNNER_TEMP/build.log" | while IFS= read -r line; do
-              echo "::error::$line"
-            done
+          if ! bash RepairPatches/build_lemon_repaired.sh "$RUNNER_TEMP/lemon_build" "$GITHUB_WORKSPACE/melon_data_repaired.zip" > "$RUNNER_TEMP/build.log" 2>&1; then
+            cat "$RUNNER_TEMP/build.log"
+            MSG="$(tail -n 30 "$RUNNER_TEMP/build.log" | tr '\n' ' ' | cut -c 1-3500)"
+            echo "::error::$MSG"
             exit 1
           fi
+          cat "$RUNNER_TEMP/build.log"
 
       - name: Diagnose freshly built melon_data_repaired.zip using Repair CLI
         run: |
@@ -62,15 +63,27 @@ jobs:
 
       - name: Build Core, CLI, and Tests
         run: |
-          dotnet build Core/MelonLoader.Installer.Core.csproj -c Release
-          dotnet build Cli/MelonLoader.Installer.Cli.csproj -c Release
-          dotnet build Tests/MelonLoader.Installer.Tests.csproj -c Release
+          set -o pipefail
+          for proj in Core/MelonLoader.Installer.Core.csproj Cli/MelonLoader.Installer.Cli.csproj Tests/MelonLoader.Installer.Tests.csproj; do
+            if ! dotnet build "$proj" -c Release > "$RUNNER_TEMP/testbuild.log" 2>&1; then
+              cat "$RUNNER_TEMP/testbuild.log"
+              MSG="$(tail -n 30 "$RUNNER_TEMP/testbuild.log" | tr '\n' ' ' | cut -c 1-3500)"
+              echo "::error::$MSG"
+              exit 1
+            fi
+          done
 
       - name: Run unit and integration tests (including source-built melon_data_repaired.zip)
         env:
           REPAIRED_MELON_DATA: ${{ github.workspace }}/melon_data_repaired.zip
         run: |
-          dotnet test Tests/MelonLoader.Installer.Tests.csproj -c Release --no-build --verbosity normal
+          if ! dotnet test Tests/MelonLoader.Installer.Tests.csproj -c Release --no-build --verbosity normal > "$RUNNER_TEMP/test.log" 2>&1; then
+            cat "$RUNNER_TEMP/test.log"
+            MSG="$(tail -n 30 "$RUNNER_TEMP/test.log" | tr '\n' ' ' | cut -c 1-3500)"
+            echo "::error::$MSG"
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/test.log"
 
   build-and-test-windows:
     runs-on: windows-latest
@@ -109,7 +122,14 @@ jobs:
       - name: Publish Windows 10/11 standalone GUI executable (win-x64)
         shell: pwsh
         run: |
-          dotnet publish App/MelonLoader.Installer.App.csproj -f net8.0-windows10.0.19041.0 -c Release -r win-x64 --self-contained true -p:WindowsAppSDKSelfContained=true -o publish_win_app
+          $out = dotnet publish App/MelonLoader.Installer.App.csproj -f net8.0-windows10.0.19041.0 -c Release -r win-x64 --self-contained true -p:WindowsAppSDKSelfContained=true -o publish_win_app 2>&1
+          $code = $LASTEXITCODE
+          $out | Write-Host
+          if ($code -ne 0) {
+            $tail = ($out | Select-Object -Last 30) -join " "
+            Write-Host "::error::$tail"
+            exit $code
+          }
 
       - name: Verify Windows standalone package & run CLI verification
         shell: pwsh
