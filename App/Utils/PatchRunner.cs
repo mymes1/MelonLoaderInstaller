@@ -17,6 +17,8 @@ public static class PatchRunner
     public static string? LastLogPath => _logger?.LogPath ?? FindLatestLogPath();
     public static string LastConsoleText { get; private set; } = "";
     public static string? ActiveRepairedMelonDataPath { get; set; }
+    public static bool ReplaceLibUnity { get; set; } = false;
+    public static LemonPatchStage ActivePatchStage { get; set; } = LemonPatchStage.Full;
 
     private static PatchLogger? _logger = null;
     private static PatchingConsolePage? _consolePage = null;
@@ -125,6 +127,7 @@ public static class PatchRunner
                 _logger?.Log("Checking official Unity dependencies availability...");
                 await ApkAnalyzer.ProbeOfficialUnityDependenciesAsync(report);
                 _logger?.Log(report.FormatReport());
+                _logger?.Log(report.FormatElfAndLoadOrderReport());
                 return report;
             });
         }
@@ -617,7 +620,19 @@ public static class PatchRunner
             extraSplits = data.APKPaths.Skip(1).Where(p => !p.Contains("arm64")).Select(p => Path.Combine(_apkOutputPath, Path.GetFileName(p))).ToArray();
         }
 
-        PatchArguments arguments = new(targetApkPath, libraryApkPath, extraSplits, _apkOutputPath, _tempPath, _melonDataPath, _unityDepsPath, _unityVersion, data.PackageName, data.APKPaths.Length > 1);
+        PatchArguments arguments = new(
+            targetApkPath,
+            libraryApkPath,
+            extraSplits,
+            _apkOutputPath,
+            _tempPath,
+            _melonDataPath,
+            _unityDepsPath,
+            _unityVersion,
+            data.PackageName,
+            data.APKPaths.Length > 1,
+            replaceLibUnity: ReplaceLibUnity,
+            patchStage: ActivePatchStage);
         Patcher patcher = new(arguments, _logger!);
 
         if (!patcher.Run())

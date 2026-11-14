@@ -41,12 +41,15 @@ public sealed class ApkAnalysisReport
     public bool HasMelonLoaderAssets { get; init; }
     public bool HasDotnetAssets { get; init; }
     public string? LemonPatchDate { get; init; }
+    public string? LemonStage { get; init; }
     public string? RepairManifestJson { get; init; }
 
     public ElfInspectionResult? LibUnityElf { get; init; }
     public ElfInspectionResult? LibIl2CppElf { get; init; }
     public ElfInspectionResult? LibBootstrapElf { get; init; }
     public ElfInspectionResult? LibMainElf { get; init; }
+    public IReadOnlyDictionary<string, ElfInspectionResult> Arm64Libraries { get; init; }
+        = new Dictionary<string, ElfInspectionResult>(StringComparer.OrdinalIgnoreCase);
 
     public bool HasV1Signature { get; init; }
     public bool HasV2SignatureBlock { get; init; }
@@ -79,8 +82,12 @@ public sealed class ApkAnalysisReport
         sb.AppendLine($"Manifest Flags:     debuggable={Debuggable?.ToString() ?? "unset"}, requestLegacyExternalStorage={RequestLegacyExternalStorage?.ToString() ?? "unset"}, extractNativeLibs={ExtractNativeLibs?.ToString() ?? "unset"}");
         sb.AppendLine($"APK Signatures:     V2={(HasV2SignatureBlock ? "Present" : "Absent")}, V1={(HasV1Signature ? "Present" : "Absent")}");
         sb.AppendLine($"LemonLoader State:  {(IsLemonPatched ? "Patched" : "Unpatched")} (assets/MelonLoader={HasMelonLoaderAssets}, assets/dotnet={HasDotnetAssets}, libBootstrap.so={HasLibBootstrap})");
+        if (!string.IsNullOrWhiteSpace(LemonStage))
+            sb.AppendLine($"Lemon Stage Mode:   {LemonStage.Trim()}");
         if (!string.IsNullOrWhiteSpace(LemonPatchDate))
             sb.AppendLine($"Lemon Patch Date:   {LemonPatchDate.Trim()}");
+        if (Arm64Libraries.Count > 0)
+            sb.AppendLine($"ARM64 Libraries:    {Arm64Libraries.Count} ({string.Join(", ", Arm64Libraries.Keys.OrderBy(k => k))})");
         if (OfficialUnityDepsAvailable.HasValue)
             sb.AppendLine($"Unity Deps Online:  {(OfficialUnityDepsAvailable.Value ? "Available" : "Unavailable")} ({UnityDepsUrl})");
 
@@ -97,6 +104,63 @@ public sealed class ApkAnalysisReport
                 sb.AppendLine($"  [WARN]  {warn}");
         }
 
+        return sb.ToString();
+    }
+
+    public string FormatElfAndLoadOrderReport()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("=== ARM64 ELF Libraries, Dependencies, Exports & Load Order ===");
+        sb.AppendLine($"APK: {PrimaryApkPath}");
+        sb.AppendLine($"Stage Config (assets/lemon_stage.txt): {(string.IsNullOrWhiteSpace(LemonStage) ? "(not set -> full)" : LemonStage.Trim())}");
+        sb.AppendLine();
+
+        string[] keyExports =
+        [
+            "JNI_OnLoad",
+            "startup",
+            "load",
+            "unload",
+            "il2cpp_init",
+            "il2cpp_runtime_invoke",
+            "il2cpp_resolve_icall",
+            "DobbyHook",
+            "DobbyDestroy",
+            "Java_com_unity3d_player_UnityPlayer_nativeRender"
+        ];
+
+        foreach (var kvp in Arm64Libraries.OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            var elf = kvp.Value;
+            sb.AppendLine($"[{kvp.Key}]");
+            sb.AppendLine($"  Arch:      {elf.ArchitectureName} | Size: {elf.FileSizeBytes:N0} bytes | Max PT_LOAD Align: 0x{elf.MaxLoadSegmentAlignment:X} ({elf.MaxLoadSegmentAlignment})");
+            if (!string.IsNullOrEmpty(elf.Soname))
+                sb.AppendLine($"  SONAME:    {elf.Soname}");
+            sb.AppendLine($"  DT_NEEDED: {(elf.NeededLibraries.Count == 0 ? "(none)" : string.Join(", ", elf.NeededLibraries))}");
+
+            var matchedExports = keyExports
+                .Where(sym => elf.ExportedSymbols.Contains(sym, StringComparer.Ordinal))
+                .ToArray();
+            var nativeRenderLike = elf.ExportedSymbols
+                .Where(s => s.Contains("nativeRender", StringComparison.OrdinalIgnoreCase))
+                .Take(5)
+                .ToArray();
+
+            sb.AppendLine($"  Exports:   {elf.ExportedSymbols.Count} global/weak dynamic symbols");
+            if (matchedExports.Length > 0)
+                sb.AppendLine($"  Key Syms:  {string.Join(", ", matchedExports)}");
+            if (nativeRenderLike.Length > 0)
+                sb.AppendLine($"  RenderSym: {string.Join(", ", nativeRenderLike)}");
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("Runtime Load Order:");
+        sb.AppendLine("  1. UnityPlayer Java -> System.loadLibrary(\"main\") -> libmain.so::JNI_OnLoad");
+        sb.AppendLine("  2. NativeLoader.load(libDir) -> reads lemon_stage.txt:");
+        sb.AppendLine("     - no_hooks:           dlopen(libunity.so) -> libunity.so::JNI_OnLoad (skips libBootstrap.so)");
+        sb.AppendLine("     - minimal_bootstrap:  dlopen(libBootstrap.so) -> JNI_OnLoad -> dlopen(libunity.so) -> JNI_OnLoad (skips startup/hooks)");
+        sb.AppendLine("     - il2cpp_init_only:   + libBootstrap.so::startup() -> dlopen(libil2cpp.so) -> DobbyHook(il2cpp_init) (skips CoreCLR)");
+        sb.AppendLine("     - full:               + base_assembly::init (libhostfxr.so / libcoreclr.so) -> DobbyHook(il2cpp_runtime_invoke)");
         return sb.ToString();
     }
 }
@@ -137,12 +201,14 @@ public static class ApkAnalyzer
         bool hasMelonAssets = false;
         bool hasDotnetAssets = false;
         string? lemonPatchDate = null;
+        string? lemonStage = null;
         string? repairManifestJson = null;
 
         ElfInspectionResult? libUnityElf = null;
         ElfInspectionResult? libIl2CppElf = null;
         ElfInspectionResult? libBootstrapElf = null;
         ElfInspectionResult? libMainElf = null;
+        var arm64Libraries = new Dictionary<string, ElfInspectionResult>(StringComparer.OrdinalIgnoreCase);
 
         bool hasV1 = false;
         bool hasV2 = false;
@@ -231,6 +297,12 @@ public static class ApkAnalyzer
                     lemonPatchDate = sr.ReadToEnd();
                 }
 
+                if (full.Equals("assets/lemon_stage.txt", StringComparison.OrdinalIgnoreCase))
+                {
+                    using var sr = new StreamReader(entry.Open(), Encoding.UTF8);
+                    lemonStage = sr.ReadToEnd();
+                }
+
                 if (full.Equals("assets/MelonLoader/repair-manifest.json", StringComparison.OrdinalIgnoreCase))
                 {
                     using var sr = new StreamReader(entry.Open(), Encoding.UTF8);
@@ -243,33 +315,39 @@ public static class ApkAnalyzer
                     if (parts.Length >= 3 && !string.IsNullOrWhiteSpace(parts[1]))
                         abis.Add(parts[1]);
 
-                    if (full.Equals("lib/arm64-v8a/libunity.so", StringComparison.OrdinalIgnoreCase))
+                    if (parts.Length >= 3 &&
+                        parts[1].Equals("arm64-v8a", StringComparison.OrdinalIgnoreCase) &&
+                        full.EndsWith(".so", StringComparison.OrdinalIgnoreCase))
                     {
-                        hasLibUnity = true;
+                        string libFileName = parts[^1];
                         using var s = entry.Open();
-                        libUnityElf = ElfHeaderInspector.InspectStream(s);
-                    }
-                    else if (full.Equals("lib/arm64-v8a/libil2cpp.so", StringComparison.OrdinalIgnoreCase))
-                    {
-                        hasLibIl2Cpp = true;
-                        using var s = entry.Open();
-                        libIl2CppElf = ElfHeaderInspector.InspectStream(s);
-                    }
-                    else if (full.Equals("lib/arm64-v8a/libmain.so", StringComparison.OrdinalIgnoreCase))
-                    {
-                        hasLibMain = true;
-                        using var s = entry.Open();
-                        libMainElf = ElfHeaderInspector.InspectStream(s);
-                    }
-                    else if (full.Equals("lib/arm64-v8a/libBootstrap.so", StringComparison.OrdinalIgnoreCase))
-                    {
-                        hasLibBootstrap = true;
-                        using var s = entry.Open();
-                        libBootstrapElf = ElfHeaderInspector.InspectStream(s);
-                    }
-                    else if (full.Equals("lib/arm64-v8a/libdobby.so", StringComparison.OrdinalIgnoreCase))
-                    {
-                        hasLibDobby = true;
+                        var elf = ElfHeaderInspector.InspectStream(s);
+                        arm64Libraries[libFileName] = elf;
+
+                        if (libFileName.Equals("libunity.so", StringComparison.OrdinalIgnoreCase))
+                        {
+                            hasLibUnity = true;
+                            libUnityElf = elf;
+                        }
+                        else if (libFileName.Equals("libil2cpp.so", StringComparison.OrdinalIgnoreCase))
+                        {
+                            hasLibIl2Cpp = true;
+                            libIl2CppElf = elf;
+                        }
+                        else if (libFileName.Equals("libmain.so", StringComparison.OrdinalIgnoreCase))
+                        {
+                            hasLibMain = true;
+                            libMainElf = elf;
+                        }
+                        else if (libFileName.Equals("libBootstrap.so", StringComparison.OrdinalIgnoreCase))
+                        {
+                            hasLibBootstrap = true;
+                            libBootstrapElf = elf;
+                        }
+                        else if (libFileName.Equals("libdobby.so", StringComparison.OrdinalIgnoreCase))
+                        {
+                            hasLibDobby = true;
+                        }
                     }
                 }
             }
@@ -324,11 +402,13 @@ public static class ApkAnalyzer
             HasMelonLoaderAssets = hasMelonAssets,
             HasDotnetAssets = hasDotnetAssets,
             LemonPatchDate = lemonPatchDate,
+            LemonStage = lemonStage,
             RepairManifestJson = repairManifestJson,
             LibUnityElf = libUnityElf,
             LibIl2CppElf = libIl2CppElf,
             LibBootstrapElf = libBootstrapElf,
             LibMainElf = libMainElf,
+            Arm64Libraries = arm64Libraries,
             HasV1Signature = hasV1,
             HasV2SignatureBlock = hasV2,
             Warnings = warnings,

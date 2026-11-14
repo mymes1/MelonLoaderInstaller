@@ -18,6 +18,12 @@ internal class DownloadUnityDeps : IPatchStep
             return true;
         }
 
+        if (!patcher.Args.ReplaceLibUnity)
+        {
+            patcher.Logger.Log("Preserving original APK lib/arm64-v8a/libunity.so (ReplaceLibUnity=false).");
+            return true;
+        }
+
         if (!patcher.Args.UnityVersion.HasValue)
         {
             patcher.Logger.Log("Got to DownloadUnityDeps while UnityVersion is null, how did this happen?");

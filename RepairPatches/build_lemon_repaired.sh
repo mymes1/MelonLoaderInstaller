@@ -79,6 +79,7 @@ export CC_aarch64_linux_android="$TOOLCHAIN_BIN/aarch64-linux-android24-clang"
 export CXX_aarch64_linux_android="$TOOLCHAIN_BIN/aarch64-linux-android24-clang++"
 export AR_aarch64_linux_android="$TOOLCHAIN_BIN/llvm-ar"
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$TOOLCHAIN_BIN/aarch64-linux-android24-clang"
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-C link-arg=-Wl,-z,max-page-size=16384"
 
 RUST_TOOLCHAIN="${LEMON_RUST_TOOLCHAIN:-1.81.0}"
 rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target aarch64-linux-android
@@ -130,6 +131,12 @@ cp -f "$ML_DIR/BaseLibs/openssl/libcrypto.so" "$STAGE/dotnet/shared/Microsoft.NE
 # Native ARM64 binaries (libBootstrap.so, libmain.so, libdobby.so)
 cp -f "$ML_DIR/target/aarch64-linux-android/release/libBootstrap.so" "$STAGE/native/libBootstrap.so"
 cp -f "$ML_DIR/target/aarch64-linux-android/release/libmain.so" "$STAGE/native/libmain.so"
+
+echo "=== Verifying built ARM64 ELF binaries ==="
+for so in "$STAGE/native/libBootstrap.so" "$STAGE/native/libmain.so"; do
+  echo "--- $(basename "$so") ---"
+  readelf -h -lW -d "$so" | grep -E "Machine|LOAD|NEEDED|SONAME"
+done
 
 DOBBY_SO="$(find "${CARGO_HOME:-$HOME/.cargo}/git/checkouts" -path "*/dobby_libraries/android/arm64/libdobby.so" | head -n 1 || true)"
 if [ -z "$DOBBY_SO" ] || [ ! -f "$DOBBY_SO" ]; then
@@ -183,7 +190,8 @@ manifest = {
         "DotnetAssemblyLoadContextFix: removed obsolete .NET 6 LoadFromPath/LoadFromStream hooks (fixes NullReferenceException: Null method for MelonLoader)",
         "HarmonyNullGuards: added null guards across DotnetAssemblyLoadContextFix, DotnetModHandlerRedirectionFix, InstancePatchFix, PatchShield, DetourContextDisposeFix, ProcessFix",
         "Il2CppInteropABIAlignment: rebuilt MelonLoader, SupportModules/Il2Cpp, Il2CppAssemblyGenerator, and Il2CppInterop together with unified AsmResolver 6.0.0-beta.5 (fixes MissingMethodException: RegisterTypeOptions.set_LogSuccess)",
-        "AndroidSSLAndUnityStripping: includes LemonLoader SSL_CERT_DIR fix (1ddfecd) and Il2CppInterop ScriptingMethodInvoke_Hook (631db44)"
+        "AndroidSSLAndUnityStripping: includes LemonLoader SSL_CERT_DIR fix (1ddfecd) and Il2CppInterop ScriptingMethodInvoke_Hook (631db44)",
+        "EarlyNativeCrashLoggingAndStagedIsolation: added unconditional __android_log_write + crash-surviving /data/data/<pkg>/files/lemon_early_crash.log, SIGSEGV/SIGABRT/SIGBUS dladdr handler, safe libunity.so-before-startup load order, libDir-aware dlopen, extern \"C\"/\"system\" detour ABIs, null-checked AAssetManager, and assets/lemon_stage.txt stage isolation"
     ],
     "sourceCommits": {
         "LemonLoader/MelonLoader": ml_sha,

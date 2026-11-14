@@ -420,9 +420,30 @@ public static class LemonDataDiagnostics
                 hasSslCertFix
                     ? "libBootstrap.so includes Android SSL_CERT_DIR fix (needed for HTTPS Il2CppAssemblyGenerator/mods)."
                     : "libBootstrap.so is missing Android SSL_CERT_DIR environment fix (pre-1ddfecd build)."));
+
+            bool hasEarlyCrashLog = ElfHeaderInspector.ContainsAscii(bootstrapBytes, "lemon_early_crash.log");
+            report.Checks.Add(new DiagnosticCheck(
+                "BOOTSTRAP_EARLY_LOGGING",
+                "libBootstrap.so",
+                hasEarlyCrashLog ? DiagnosticSeverity.Pass : DiagnosticSeverity.Warning,
+                hasEarlyCrashLog
+                    ? "libBootstrap.so includes early crash-surviving logging, signal handler, and stage isolation."
+                    : "libBootstrap.so lacks early crash-surviving logging (lemon_early_crash.log)."));
         }
 
-        CheckArm64Elf(report, readBytes, nativePrefix + "libmain.so", "libmain.so", required: true);
+        byte[]? mainBytes = readBytes(nativePrefix + "libmain.so");
+        var mainElf = CheckArm64Elf(report, readBytes, nativePrefix + "libmain.so", "libmain.so", required: true);
+        if (mainElf != null && mainElf.IsArm64 && mainBytes != null)
+        {
+            bool hasProxyEarlyLog = ElfHeaderInspector.ContainsAscii(mainBytes, "lemon_early_crash.log");
+            report.Checks.Add(new DiagnosticCheck(
+                "MAIN_EARLY_LOGGING",
+                "libmain.so",
+                hasProxyEarlyLog ? DiagnosticSeverity.Pass : DiagnosticSeverity.Warning,
+                hasProxyEarlyLog
+                    ? "libmain.so includes early checkpoint logging, libDir-aware dlopen, and safe load ordering."
+                    : "libmain.so lacks early checkpoint logging and stage isolation."));
+        }
         CheckArm64Elf(report, readBytes, nativePrefix + "libdobby.so", "libdobby.so", required: true);
         if (requireLibUnity)
             CheckArm64Elf(report, readBytes, nativePrefix + "libunity.so", "libunity.so", required: true);

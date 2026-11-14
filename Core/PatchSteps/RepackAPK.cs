@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Data;
 using System.IO;
 using System.IO.Compression;
@@ -45,12 +45,20 @@ internal class RepackAPK : IPatchStep
         CopyTo(archive, Path.Combine(patcher.Info.LemonDataDirectory, "MelonLoader"), "assets/MelonLoader");
         CopyTo(archive, Path.Combine(patcher.Info.LemonDataDirectory, "dotnet"), "assets/dotnet");
         WritePatchDate(archive);
+        WriteStageConfig(archive, patcher.Args.PatchStage);
+        patcher.Logger.Log($"Configured LemonLoader native stage: {patcher.Args.PatchStage.ToAssetToken()}");
+
+        string unityOverrideDir = Path.Combine(patcher.Info.UnityNativeDirectory, "arm64-v8a");
+        bool hasUnityOverride = Directory.Exists(unityOverrideDir) && Directory.GetFiles(unityOverrideDir, "*.so", SearchOption.AllDirectories).Length > 0;
 
         // libs data
         if (!patcher.Args.IsSplit)
         {
             CopyTo(archive, Path.Combine(patcher.Info.LemonDataDirectory, "native"), "lib/arm64-v8a", "*.so");
-            CopyTo(archive, Path.Combine(patcher.Info.UnityNativeDirectory, "arm64-v8a"), "lib/arm64-v8a", "*.so");
+            if (hasUnityOverride)
+                CopyTo(archive, unityOverrideDir, "lib/arm64-v8a", "*.so");
+            else
+                patcher.Logger.Log("Keeping original APK lib/arm64-v8a/libunity.so untouched.");
         }
         else
         {
@@ -58,7 +66,10 @@ internal class RepackAPK : IPatchStep
             using ZipArchive libArchive = new(libStream, ZipArchiveMode.Read | ZipArchiveMode.Update);
 
             CopyTo(libArchive, Path.Combine(patcher.Info.LemonDataDirectory, "native"), "lib/arm64-v8a", "*.so");
-            CopyTo(libArchive, Path.Combine(patcher.Info.UnityNativeDirectory, "arm64-v8a"), "lib/arm64-v8a", "*.so");
+            if (hasUnityOverride)
+                CopyTo(libArchive, unityOverrideDir, "lib/arm64-v8a", "*.so");
+            else
+                patcher.Logger.Log("Keeping original split APK lib/arm64-v8a/libunity.so untouched.");
         }
 
         patcher.Logger.Log("Writing, this can take a few");
@@ -86,6 +97,18 @@ internal class RepackAPK : IPatchStep
             using Stream entryStream = entry.Open();
             sourceStream.CopyTo(entryStream);
         }
+    }
+
+    private static void WriteStageConfig(ZipArchive archive, LemonPatchStage stage)
+    {
+        const string entryPath = "assets/lemon_stage.txt";
+        ZipArchiveEntry? entry = archive.GetEntry(entryPath);
+        entry?.Delete();
+
+        byte[] bytes = Encoding.UTF8.GetBytes(stage.ToAssetToken());
+        entry = archive.CreateEntry(entryPath, CompressionLevel.Optimal);
+        using Stream entryStream = entry.Open();
+        entryStream.Write(bytes);
     }
 
     private static void WritePatchDate(ZipArchive archive)

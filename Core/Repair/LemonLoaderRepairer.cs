@@ -198,7 +198,9 @@ public static class LemonLoaderRepairer
         string outputApkPath,
         string repairedBundlePath,
         string? localUnityDepsPath,
-        IPatchLogger logger)
+        IPatchLogger logger,
+        bool replaceLibUnity = false,
+        LemonPatchStage stage = LemonPatchStage.Full)
     {
         if (!File.Exists(inputApkPath))
             throw new FileNotFoundException("Input APK not found.", inputApkPath);
@@ -230,7 +232,7 @@ public static class LemonLoaderRepairer
             string workApk = Path.Combine(tempWork, "repaired.apk");
             File.Copy(inputApkPath, workApk, overwrite: true);
 
-            // Resolve unstripped libunity.so if local unity deps provided or download official
+            // Preserve original libunity.so unless replaceLibUnity or localUnityDepsPath is explicitly provided
             var patchArgs = new PatchArguments(
                 workApk,
                 "",
@@ -241,7 +243,9 @@ public static class LemonLoaderRepairer
                 localUnityDepsPath ?? "",
                 apkAnalysis.UnityVersion,
                 apkAnalysis.PackageName,
-                false);
+                false,
+                replaceLibUnity: replaceLibUnity,
+                patchStage: stage);
             var patcher = new Patcher(patchArgs, logger);
 
             if (!string.IsNullOrEmpty(localUnityDepsPath) && File.Exists(localUnityDepsPath))
@@ -249,9 +253,14 @@ public static class LemonLoaderRepairer
                 if (!new ExtractUnityLibs().Run(patcher))
                     throw new InvalidOperationException("Failed to extract local Unity dependencies.");
             }
-            else if (!new DownloadUnityDeps().Run(patcher))
+            else if (replaceLibUnity)
             {
-                throw new InvalidOperationException("Failed to obtain unstripped libunity.so for Unity " + apkAnalysis.UnityVersionString);
+                if (!new DownloadUnityDeps().Run(patcher))
+                    throw new InvalidOperationException("Failed to obtain unstripped libunity.so for Unity " + apkAnalysis.UnityVersionString);
+            }
+            else
+            {
+                logger.Log("Preserving original APK lib/arm64-v8a/libunity.so during repair.");
             }
 
             // Update AndroidManifest.xml (permissions, debuggable, requestLegacyExternalStorage, extractNativeLibs=true)
@@ -267,9 +276,11 @@ public static class LemonLoaderRepairer
                 CopyDirectoryToArchive(archive, Path.Combine(bundleExtract, "MelonLoader"), "assets/MelonLoader");
                 CopyDirectoryToArchive(archive, Path.Combine(bundleExtract, "dotnet"), "assets/dotnet");
                 WritePatchDate(archive);
+                WriteStageConfig(archive, stage);
 
                 CopyDirectoryToArchive(archive, Path.Combine(bundleExtract, "native"), "lib/arm64-v8a", "*.so");
-                CopyDirectoryToArchive(archive, unityArm64Dir, "lib/arm64-v8a", "*.so");
+                if (Directory.GetFiles(unityArm64Dir, "*.so", SearchOption.AllDirectories).Length > 0)
+                    CopyDirectoryToArchive(archive, unityArm64Dir, "lib/arm64-v8a", "*.so");
             }
 
             // Generate certificate, align, and sign V2
@@ -390,6 +401,15 @@ public static class LemonLoaderRepairer
             using var dst = entry.Open();
             src.CopyTo(dst);
         }
+    }
+
+    private static void WriteStageConfig(ZipArchive archive, LemonPatchStage stage)
+    {
+        const string entryPath = "assets/lemon_stage.txt";
+        archive.GetEntry(entryPath)?.Delete();
+        var entry = archive.CreateEntry(entryPath, CompressionLevel.Optimal);
+        using var s = entry.Open();
+        s.Write(Encoding.UTF8.GetBytes(stage.ToAssetToken()));
     }
 
     private static void WritePatchDate(ZipArchive archive)
