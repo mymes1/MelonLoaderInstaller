@@ -1,4 +1,5 @@
-﻿using AssetsTools.NET.Extra;
+using AssetsTools.NET.Extra;
+using MelonLoader.Installer.Core.Diagnostics;
 using System;
 using System.IO;
 using System.IO.Compression;
@@ -13,33 +14,21 @@ internal class DetectUnityVersion : IPatchStep
         if (patcher.Args.UnityVersion != null && patcher.Args.UnityVersion != UnityVersion.MinVersion)
             return true;
 
-        using FileStream apkStream = new(patcher.Info.OutputBaseApkPath, FileMode.Open);
+        using FileStream apkStream = new(patcher.Info.OutputBaseApkPath, FileMode.Open, FileAccess.Read, FileShare.Read);
         using ZipArchive archive = new(apkStream, ZipArchiveMode.Read);
 
-        AssetsManager uAssetsManager = new();
-
-        // Try to read directly from file
         try
         {
-            ZipArchiveEntry assetEntry = archive.GetEntry("assets/bin/Data/globalgamemanagers")!;
-            using Stream stream = assetEntry.Open();
+            UnityVersion detected = ApkAnalyzer.DetectUnityVersionFromArchive(archive);
+            if (detected == UnityVersion.MinVersion)
+            {
+                patcher.Logger.Log("Failed to get Unity version, cannot patch (missing globalgamemanagers and data.unity3d).");
+                patcher.Args.UnityVersion = UnityVersion.MinVersion;
+                return false;
+            }
 
-            AssetsFileInstance instance = uAssetsManager.LoadAssetsFile(stream, "/bin/Data/globalgamemanagers", true);
-            patcher.Args.UnityVersion = UnityVersion.Parse(instance.file.Metadata.UnityVersion);
-
+            patcher.Args.UnityVersion = detected;
             return true;
-        }
-        catch { }
-
-        // If failed before, try to get the data from data.unity3d
-        try
-        {
-            ZipArchiveEntry assetEntry = archive.GetEntry("assets/bin/Data/data.unity3d")!;
-            using Stream stream = assetEntry.Open();
-
-            BundleFileInstance bundle = uAssetsManager.LoadBundleFile(stream, "/bin/Data/data.unity3d");
-            AssetsFileInstance instance = uAssetsManager.LoadAssetsFileFromBundle(bundle, "globalgamemanagers");
-            patcher.Args.UnityVersion = UnityVersion.Parse(instance.file.Metadata.UnityVersion);
         }
         catch (Exception ex)
         {
@@ -47,7 +36,5 @@ internal class DetectUnityVersion : IPatchStep
             patcher.Args.UnityVersion = UnityVersion.MinVersion;
             return false;
         }
-
-        return true;
     }
 }
