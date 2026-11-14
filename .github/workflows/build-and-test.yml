@@ -36,7 +36,13 @@ jobs:
 
       - name: Diagnose freshly built melon_data_repaired.zip using Repair CLI
         run: |
-          dotnet run --project Cli/MelonLoader.Installer.Cli.csproj -c Release -- diagnose "$GITHUB_WORKSPACE/melon_data_repaired.zip"
+          if ! dotnet run --project Cli/MelonLoader.Installer.Cli.csproj -c Release -- diagnose "$GITHUB_WORKSPACE/melon_data_repaired.zip" > "$RUNNER_TEMP/diag.log" 2>&1; then
+            MSG="$(tail -n 40 "$RUNNER_TEMP/diag.log" | tr '\n' ' ' | cut -c 1-3500)"
+            echo "::error::$MSG"
+            cat "$RUNNER_TEMP/diag.log"
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/diag.log"
 
       - name: Upload melon_data_repaired.zip artifact
         uses: actions/upload-artifact@v4
@@ -112,12 +118,30 @@ jobs:
         env:
           REPAIRED_MELON_DATA: ${{ github.workspace }}\Resources\repaired\melon_data_repaired.zip
         run: |
-          dotnet test Tests/MelonLoader.Installer.Tests.csproj -c Release --verbosity normal
+          $out = dotnet test Tests/MelonLoader.Installer.Tests.csproj -c Release --verbosity normal 2>&1
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            $tail = (($out | Select-Object -Last 35) -join " ")
+            if ($tail.Length -gt 3500) { $tail = $tail.Substring(0, 3500) }
+            Write-Host "::error::$tail"
+            $out | Write-Host
+            exit $code
+          }
+          $out | Write-Host
 
       - name: Publish Windows standalone Repair CLI (win-x64)
         shell: pwsh
         run: |
-          dotnet publish Cli/MelonLoader.Installer.Cli.csproj -c Release -r win-x64 --self-contained true -o publish_win_cli
+          $out = dotnet publish Cli/MelonLoader.Installer.Cli.csproj -c Release -r win-x64 --self-contained true -o publish_win_cli 2>&1
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            $tail = (($out | Select-Object -Last 35) -join " ")
+            if ($tail.Length -gt 3500) { $tail = $tail.Substring(0, 3500) }
+            Write-Host "::error::$tail"
+            $out | Write-Host
+            exit $code
+          }
+          $out | Write-Host
 
       - name: Publish Windows 10/11 standalone GUI executable (win-x64)
         shell: pwsh

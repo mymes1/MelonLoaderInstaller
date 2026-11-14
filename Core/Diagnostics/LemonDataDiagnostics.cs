@@ -208,21 +208,18 @@ public static class LemonDataDiagnostics
                     DiagnosticSeverity.Pass,
                     $"Found MelonLoader.dll v{mlInfo.AssemblyVersion} ({mlInfo.TargetFramework ?? "net8"})"));
 
-                bool hasLoadFromPathRef = mlInfo.MemberRefNames.Any(m =>
-                    m.Contains("AssemblyLoadContext", StringComparison.Ordinal) &&
-                    (m.Contains("LoadFromPath", StringComparison.Ordinal) || m.Contains("LoadFromStream", StringComparison.Ordinal)));
-
-                bool hasLoadFromPathMethodRef = mlInfo.MemberRefNames.Any(m =>
-                    m.EndsWith("::LoadFromPath", StringComparison.Ordinal) ||
-                    m.EndsWith("::LoadFromStream", StringComparison.Ordinal));
-
+                // MelonAssembly.cs legitimately calls public AssemblyLoadContext.Default.LoadFromStream(Stream, Stream),
+                // which emits an ASCII MemberRef "LoadFromStream". The broken .NET 6 QCall hook in
+                // DotnetAssemblyLoadContextFix emits UTF-16LE user-string literals ("LoadFromPath"/"LoadFromStream")
+                // and/or AlcQCallLoadFromPath / AlcQCallLoadFromStream / PreAlcLoadFromPath / PreAlcLoadFromStream.
                 bool hasAlcFixStrings =
                     ElfHeaderInspector.ContainsAscii(mlDll, "LoadFromPath") ||
-                    ElfHeaderInspector.ContainsAscii(mlDll, "LoadFromStream") ||
+                    ElfHeaderInspector.ContainsAscii(mlDll, "AlcQCallLoadFrom") ||
+                    ElfHeaderInspector.ContainsAscii(mlDll, "PreAlcLoadFrom") ||
                     ElfHeaderInspector.ContainsUtf16(mlDll, "LoadFromPath") ||
                     ElfHeaderInspector.ContainsUtf16(mlDll, "LoadFromStream");
 
-                if (hasLoadFromPathMethodRef || hasAlcFixStrings)
+                if (hasAlcFixStrings)
                 {
                     report.Checks.Add(new DiagnosticCheck(
                         "ALC_QCALL_HOOKS",
