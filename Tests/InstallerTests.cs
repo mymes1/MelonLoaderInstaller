@@ -69,12 +69,15 @@ public sealed class InstallerTests : IDisposable
             }
             """);
 
-        byte[] il2cppMismatchedBytes = CompileCSharpAssembly("Il2Cpp", """
+        byte[] runtimeGetSetBytes = CompileCSharpAssembly("Il2CppInterop.Runtime", """
             namespace Il2CppInterop.Runtime.Injection {
                 public class RegisterTypeOptions {
                     public bool LogSuccess { get; set; } = true;
                 }
             }
+            """);
+
+        byte[] il2cppMismatchedBytes = CompileCSharpAssembly("Il2Cpp", """
             namespace MelonLoader.Support {
                 public class Main {
                     public static void Test() {
@@ -82,7 +85,8 @@ public sealed class InstallerTests : IDisposable
                     }
                 }
             }
-            """);
+            """,
+            MetadataReference.CreateFromImage(runtimeGetSetBytes));
 
         byte[] il2cppMatchingBytes = CompileCSharpAssembly("Il2Cpp", """
             namespace MelonLoader.Support {
@@ -414,6 +418,7 @@ public sealed class InstallerTests : IDisposable
             Metadata = new AssetsFileMetadata
             {
                 UnityVersion = unityVersion,
+                UserInformation = string.Empty,
                 TargetPlatform = 13, // Android
                 TypeTreeEnabled = false,
                 TypeTreeTypes = [],
