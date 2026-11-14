@@ -24,6 +24,17 @@ python3 "$SCRIPT_DIR/apply_lemonloader_repairs.py" "$ML_DIR"
 
 echo "[3/7] Building External/MonoMod (net8.0 Release)..."
 pushd "$ML_DIR/External/MonoMod" >/dev/null
+python3 - <<'PYEOF'
+import json
+from pathlib import Path
+gj = Path("global.json")
+if gj.exists():
+    data = json.loads(gj.read_text(encoding="utf-8"))
+    if "sdk" in data:
+        data["sdk"]["rollForward"] = "latestFeature"
+    gj.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    print("[patched] External/MonoMod/global.json rollForward -> latestFeature")
+PYEOF
 for proj in \
   src/MonoMod.ILHelpers/MonoMod.ILHelpers.csproj \
   src/MonoMod.Utils/MonoMod.Utils.csproj \

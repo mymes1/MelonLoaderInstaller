@@ -25,7 +25,13 @@ jobs:
       - name: Build repaired LemonLoader melon_data_repaired.zip from official fork sources
         run: |
           chmod +x RepairPatches/build_lemon_repaired.sh
-          bash RepairPatches/build_lemon_repaired.sh "$RUNNER_TEMP/lemon_build" "$GITHUB_WORKSPACE/melon_data_repaired.zip"
+          set -o pipefail
+          if ! bash RepairPatches/build_lemon_repaired.sh "$RUNNER_TEMP/lemon_build" "$GITHUB_WORKSPACE/melon_data_repaired.zip" 2>&1 | tee "$RUNNER_TEMP/build.log"; then
+            tail -n 60 "$RUNNER_TEMP/build.log" | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+            exit 1
+          fi
 
       - name: Diagnose freshly built melon_data_repaired.zip using Repair CLI
         run: |
