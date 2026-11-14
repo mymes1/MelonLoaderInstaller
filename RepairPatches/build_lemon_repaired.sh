@@ -47,12 +47,9 @@ if gj.exists():
     print("[patched] External/MonoMod/global.json rollForward -> latestFeature")
 PYEOF
 for proj in \
-  src/MonoMod.ILHelpers/MonoMod.ILHelpers.csproj \
-  src/MonoMod.Utils/MonoMod.Utils.csproj \
-  src/MonoMod.Core/MonoMod.Core.csproj \
   src/MonoMod.RuntimeDetour/MonoMod.RuntimeDetour.csproj \
   src/MonoMod.Patcher/MonoMod.Patcher.csproj; do
-  dotnet build "$proj" -c Release -f net8.0
+  dotnet build "$proj" -c Release -f net8.0 -noAutoRsp
 done
 popd >/dev/null
 
