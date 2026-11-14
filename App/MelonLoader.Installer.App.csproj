@@ -1,8 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
-		<TargetFrameworks>net8.0-android</TargetFrameworks>
-		<TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('windows'))">$(TargetFrameworks);net8.0-windows10.0.19041.0</TargetFrameworks>
+		<TargetFrameworks Condition="'$(TargetFrameworksOverride)' == ''">net8.0-android</TargetFrameworks>
+		<TargetFrameworks Condition="'$(TargetFrameworksOverride)' == '' and $([MSBuild]::IsOSPlatform('windows'))">$(TargetFrameworks);net8.0-windows10.0.19041.0</TargetFrameworks>
+		<TargetFrameworks Condition="'$(TargetFrameworksOverride)' != ''">$(TargetFrameworksOverride)</TargetFrameworks>
+		<CheckEolWorkloads>false</CheckEolWorkloads>
+		<CheckEolTargetFramework>false</CheckEolTargetFramework>
 		<OutputType>Exe</OutputType>
 		<RootNamespace>MelonLoader.Installer.App</RootNamespace>
 		<UseMaui>true</UseMaui>
