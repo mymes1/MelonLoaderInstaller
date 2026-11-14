@@ -132,7 +132,7 @@ jobs:
       - name: Publish Windows standalone Repair CLI (win-x64)
         shell: pwsh
         run: |
-          $out = dotnet publish Cli/MelonLoader.Installer.Cli.csproj -c Release -r win-x64 --self-contained true -o publish_win_cli 2>&1
+          $out = dotnet publish Cli/MelonLoader.Installer.Cli.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish_win_cli 2>&1
           $code = $LASTEXITCODE
           if ($code -ne 0) {
             $tail = (($out | Select-Object -Last 35) -join " ")
