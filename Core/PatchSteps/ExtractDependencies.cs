@@ -1,4 +1,4 @@
-﻿using System.IO.Compression;
+using System.IO.Compression;
 using System.IO;
 
 namespace MelonLoader.Installer.Core.PatchSteps;
@@ -10,9 +10,9 @@ internal class ExtractDependencies : IPatchStep
         patcher.Logger.Log("Extracting Dependencies");
 
         {
-            using FileStream zipStream = new(patcher.Args.MelonDataPath, FileMode.Open);
+            using FileStream zipStream = new(patcher.Args.MelonDataPath, FileMode.Open, FileAccess.Read);
             using ZipArchive archive = new(zipStream, ZipArchiveMode.Read);
-            archive.ExtractToDirectory(patcher.Info.LemonDataDirectory);
+            archive.ExtractToDirectory(patcher.Info.LemonDataDirectory, overwriteFiles: true);
         }
 
         return true;

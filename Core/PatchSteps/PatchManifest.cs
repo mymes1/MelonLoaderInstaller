@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
@@ -64,6 +64,7 @@ internal class PatchManifest : IPatchStep
         AxmlSaver.SaveDocument(saveStream, manifest);
         saveStream.Position = 0;
         manifestStream.Position = 0;
+        manifestStream.SetLength(0);
 
         saveStream.CopyTo(manifestStream);
 
@@ -100,17 +101,14 @@ internal class PatchManifest : IPatchStep
             appElement.Attributes.Add(new("requestLegacyExternalStorage", AndroidNamespaceUri, LegacyStorageAttributeResourceId, true));
         }
 
-        // This has only been an issue for split APKs
-        if (_patcher!.Args.IsSplit)
+        // Android 15 and compressed .so entries require extractNativeLibs=true on both single and split APKs
+        _logger!.Log("Patching extract native libraries flag");
+        AxmlAttribute? extract = appElement.Attributes.FirstOrDefault(attribute => attribute.Name == "extractNativeLibs");
+        if (extract != null)
+            extract.Value = true;
+        else
         {
-            _logger!.Log("Patching extract native libraries flag");
-            AxmlAttribute? extract = appElement.Attributes.FirstOrDefault(attribute => attribute.Name == "extractNativeLibs");
-            if (extract != null)
-                extract.Value = true;
-            else
-            {
-                appElement.Attributes.Add(new("extractNativeLibs", AndroidNamespaceUri, ExtractNativeLibsAttributeResourceId, true));
-            }
+            appElement.Attributes.Add(new("extractNativeLibs", AndroidNamespaceUri, ExtractNativeLibsAttributeResourceId, true));
         }
     }
 

@@ -6,16 +6,19 @@ namespace MelonLoader.Installer.App.Views;
 public partial class PatchAppPage : ContentPage
 {
     private string? _lastWarnedPackage;
+    private readonly PatchAppPageViewModel _viewModel;
 
-	public PatchAppPage()
-	{
-		InitializeComponent();
-        BindingContext = new PatchAppPageViewModel();
+    public PatchAppPage()
+    {
+        InitializeComponent();
+        _viewModel = new PatchAppPageViewModel();
+        BindingContext = _viewModel;
     }
 
     protected override async void OnNavigatedTo(NavigatedToEventArgs args)
     {
         AppDisplay.BindingContext = PatchAppPageViewModel.CurrentAppData;
+        _viewModel.RefreshLocalSummary();
 
         string? backupDir = PatchAppPageViewModel.CurrentAppData.GetBackupDirectory();
         if (backupDir != null && Directory.Exists(backupDir) && Directory.GetFiles(backupDir, "*.apk").Length > 0)

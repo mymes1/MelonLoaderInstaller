@@ -1,8 +1,6 @@
-﻿using System.IO;
-using System.Net;
+using System;
+using System.IO;
 using System.Net.Http;
-using System.Net.Security;
-using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
 namespace MelonLoader.Installer.Core.PatchSteps;
@@ -14,45 +12,63 @@ internal class DownloadUnityDeps : IPatchStep
 
     public bool Run(Patcher patcher)
     {
-        if (File.Exists(patcher.Args.UnityDependenciesPath))
+        if (!string.IsNullOrEmpty(patcher.Args.UnityDependenciesPath) && File.Exists(patcher.Args.UnityDependenciesPath))
         {
             patcher.Logger.Log("Using local Unity dependencies!");
             return true;
         }
 
-        patcher.Logger.Log("Downloading Unity dependencies");
-
-        using HttpClient client = new();
-
         if (!patcher.Args.UnityVersion.HasValue)
         {
             patcher.Logger.Log("Got to DownloadUnityDeps while UnityVersion is null, how did this happen?");
             return false;
-        }   
-        
+        }
+
         string unityVersion = patcher.Args.UnityVersion.Value.ToStringWithoutType();
+        string libDir = Path.Combine(patcher.Info.UnityNativeDirectory, "arm64-v8a");
+        if (!Directory.Exists(libDir))
+            Directory.CreateDirectory(libDir);
+
+        string libUnityOutPath = Path.Combine(libDir, "libunity.so");
+        string cacheDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MelonLoader.Installer.App", "UnityCache", unityVersion);
+        string cachedLibUnity = Path.Combine(cacheDir, "libunity.so.arm64-v8a");
+
+        if (File.Exists(cachedLibUnity) && new FileInfo(cachedLibUnity).Length > 0)
+        {
+            patcher.Logger.Log($"Using cached Unity {unityVersion} arm64-v8a dependencies");
+            File.Copy(cachedLibUnity, libUnityOutPath, true);
+            return true;
+        }
+
+        patcher.Logger.Log($"Downloading Unity {unityVersion} arm64-v8a dependencies");
+
+        using HttpClient client = new();
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("MelonLoaderInstaller/1.0");
+        client.Timeout = TimeSpan.FromMinutes(5);
+
+        string url = patcher.Args.UnityVersion.Value.Type == AssetRipper.Primitives.UnityVersionType.China
+            ? CHINA_LIBUNITY_URL_TEMPLATE
+            : LIBUNITY_URL_TEMPLATE;
+        string formattedUrl = string.Format(url, unityVersion, "arm64-v8a");
 
         try
         {
-            var originalValidator = ServicePointManager.ServerCertificateValidationCallback;
-            ServicePointManager.ServerCertificateValidationCallback = new RemoteCertificateValidationCallback(delegate { return true; });
+            patcher.Logger.Log($"Fetching [ {formattedUrl} ]");
+            byte[] data = Task.Run(() => client.GetByteArrayAsync(formattedUrl)).GetAwaiter().GetResult();
+            File.WriteAllBytes(libUnityOutPath, data);
 
-            string url = patcher.Args.UnityVersion.Value.Type == AssetRipper.Primitives.UnityVersionType.China ? CHINA_LIBUNITY_URL_TEMPLATE : LIBUNITY_URL_TEMPLATE;
+            try
+            {
+                Directory.CreateDirectory(cacheDir);
+                File.WriteAllBytes(cachedLibUnity, data);
+            }
+            catch { }
 
-            Task<byte[]> task = client.GetByteArrayAsync(string.Format(url, unityVersion, "arm64-v8a"));
-            task.Wait();
-
-            string libDir = Path.Combine(patcher.Info.UnityNativeDirectory, "arm64-v8a");
-            if (!Directory.Exists(libDir))
-                Directory.CreateDirectory(libDir);
-
-            File.WriteAllBytes(Path.Combine(libDir, "libunity.so"), task.Result);
-
-            ServicePointManager.ServerCertificateValidationCallback = originalValidator;
+            patcher.Logger.Log($"Downloaded libunity.so ({data.Length:N0} bytes)");
         }
-        catch (WebException ex)
+        catch (Exception ex)
         {
-            patcher.Logger.Log("Failed to download Unity dependencies. You may need to generate them manually.\n" + ex.ToString());
+            patcher.Logger.Log("Failed to download Unity dependencies. You may need to provide a local Unity dependencies zip.\n" + ex);
             return false;
         }
 

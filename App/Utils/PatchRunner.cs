@@ -1,6 +1,8 @@
-﻿using AdvancedSharpAdbClient.Exceptions;
+using AdvancedSharpAdbClient.Exceptions;
 using MelonLoader.Installer.App.Views;
 using MelonLoader.Installer.Core;
+using MelonLoader.Installer.Core.Diagnostics;
+using MelonLoader.Installer.Core.Repair;
 using Newtonsoft.Json.Linq;
 using System.Diagnostics;
 using System.Text;
@@ -11,6 +13,10 @@ namespace MelonLoader.Installer.App.Utils;
 public static class PatchRunner
 {
     public static bool IsPatching => _isPatching;
+    public static string? LastPatchedApkPath { get; private set; }
+    public static string? LastLogPath => _logger?.LogPath ?? FindLatestLogPath();
+    public static string LastConsoleText { get; private set; } = "";
+    public static string? ActiveRepairedMelonDataPath { get; set; }
 
     private static PatchLogger? _logger = null;
     private static PatchingConsolePage? _consolePage = null;
@@ -26,6 +32,293 @@ public static class PatchRunner
 
     private static bool _isPatching = false;
 
+    public static string GetBaseAppDataPath()
+    {
+#if ANDROID
+        return Path.Combine(Android.OS.Environment.ExternalStorageDirectory!.ToString(), "MelonLoader.Installer.App");
+#else
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MelonLoader.Installer.App");
+#endif
+    }
+
+    public static string? FindLatestLogPath()
+    {
+        string logDir = Path.Combine(GetBaseAppDataPath(), "Logs");
+        if (!Directory.Exists(logDir))
+            return null;
+
+        return Directory.GetFiles(logDir, "*.log")
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .FirstOrDefault();
+    }
+
+    public static string GetCurrentOrLatestLogContent()
+    {
+        if (!string.IsNullOrWhiteSpace(LastConsoleText))
+            return LastConsoleText;
+
+        string? latest = FindLatestLogPath();
+        if (latest != null && File.Exists(latest))
+            return File.ReadAllText(latest);
+
+        return "No diagnostic or patching logs recorded yet.";
+    }
+
+    private static async Task PrepareConsoleAsync(string title)
+    {
+        await Shell.Current.GoToAsync(nameof(PatchingConsolePage));
+        _consolePage = (PatchingConsolePage)Shell.Current.CurrentPage;
+        _consolePage.TopTitle = title;
+        _consolePage.BackButtonVisible = false;
+        _basePath = GetBaseAppDataPath();
+        _logger = new(_consolePage, _basePath);
+        _logger.Clear();
+        _logger.Log($"Created Log File [ {_logger.LogPath} ]");
+    }
+
+    public static async Task OpenDetailedLogsAsync()
+    {
+        await Shell.Current.GoToAsync(nameof(PatchingConsolePage));
+        var page = (PatchingConsolePage)Shell.Current.CurrentPage;
+        page.TopTitle = "Detailed Logs";
+        page.BackButtonVisible = !_isPatching;
+        page.Log = GetCurrentOrLatestLogContent();
+    }
+
+    public static async Task<ApkAnalysisReport?> BeginAnalyze(UnityApplicationFinder.Data data)
+    {
+        if (_isPatching)
+            return null;
+
+        _isPatching = true;
+        ApkAnalysisReport? result = null;
+
+        try
+        {
+            Reset();
+            await PrepareConsoleAsync("Analyzing APK...");
+
+            result = await Task.Run(async () =>
+            {
+                string[] paths = data.APKPaths;
+                string? tempPullDir = null;
+
+                if (data.Source == UnityApplicationFinder.Source.ADB)
+                {
+                    tempPullDir = Path.Combine(_basePath, "analyze_temp", data.PackageName);
+                    if (Directory.Exists(tempPullDir))
+                        Directory.Delete(tempPullDir, true);
+                    Directory.CreateDirectory(tempPullDir);
+
+                    var pulled = new List<string>();
+                    foreach (string remoteApk in data.APKPaths)
+                    {
+                        string localApk = Path.Combine(tempPullDir, Path.GetFileName(remoteApk));
+                        _logger?.Log($"Pulling [ {remoteApk} ]...");
+                        await ADBManager.PullFileToPath(remoteApk, localApk);
+                        pulled.Add(localApk);
+                    }
+                    paths = pulled.ToArray();
+                }
+
+                var report = ApkAnalyzer.Analyze(paths);
+                _logger?.Log("Checking official Unity dependencies availability...");
+                await ApkAnalyzer.ProbeOfficialUnityDependenciesAsync(report);
+                _logger?.Log(report.FormatReport());
+                return report;
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger?.Log("[ERROR] " + ex);
+        }
+        finally
+        {
+            _isPatching = false;
+            if (_consolePage != null)
+                MainThread.BeginInvokeOnMainThread(() => _consolePage.BackButtonVisible = true);
+        }
+
+        return result;
+    }
+
+    public static async Task<LemonDiagnosticReport?> BeginDiagnose(string targetPath)
+    {
+        if (_isPatching)
+            return null;
+
+        _isPatching = true;
+        LemonDiagnosticReport? report = null;
+
+        try
+        {
+            Reset();
+            await PrepareConsoleAsync("Diagnosing LemonLoader...");
+
+            report = await Task.Run(() =>
+            {
+                _logger?.Log($"Inspecting [ {targetPath} ]...");
+                var diag = LemonDataDiagnostics.Inspect(targetPath);
+                _logger?.Log(diag.FormatReport());
+                return diag;
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger?.Log("[ERROR] " + ex);
+        }
+        finally
+        {
+            _isPatching = false;
+            if (_consolePage != null)
+                MainThread.BeginInvokeOnMainThread(() => _consolePage.BackButtonVisible = true);
+        }
+
+        return report;
+    }
+
+    public static async Task<string?> BeginRepairBundleOrZip(string? inputZipToRepair = null)
+    {
+        if (_isPatching)
+            return null;
+
+        _isPatching = true;
+        string? outputZip = null;
+
+        try
+        {
+            Reset();
+            await PrepareConsoleAsync("Repairing LemonLoader...");
+
+            outputZip = await Task.Run(async () =>
+            {
+                string repairedBundle = await LemonLoaderRepairer.ResolveOrDownloadRepairedBundleAsync(_logger!);
+                if (string.IsNullOrEmpty(inputZipToRepair))
+                {
+                    var diag = LemonDataDiagnostics.Inspect(repairedBundle);
+                    _logger?.Log(diag.FormatReport());
+                    ActiveRepairedMelonDataPath = repairedBundle;
+                    return repairedBundle;
+                }
+
+                string outPath = Path.Combine(
+                    Path.GetDirectoryName(inputZipToRepair) ?? GetBaseAppDataPath(),
+                    Path.GetFileNameWithoutExtension(inputZipToRepair) + "_repaired.zip");
+
+                LemonLoaderRepairer.RepairMelonDataZip(inputZipToRepair, outPath, repairedBundle, _logger!);
+                ActiveRepairedMelonDataPath = outPath;
+                return outPath;
+            });
+
+            await MainThread.InvokeOnMainThreadAsync(async () =>
+            {
+                if (outputZip != null)
+                    await PopupHelper.Alert($"LemonLoader dependencies verified/repaired:\n{outputZip}", "Repair Complete");
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger?.Log("[ERROR] " + ex);
+            await MainThread.InvokeOnMainThreadAsync(async () =>
+                await PopupHelper.Alert($"Repair failed: {ex.Message}", "Repair Failed"));
+        }
+        finally
+        {
+            _isPatching = false;
+            if (_consolePage != null)
+                MainThread.BeginInvokeOnMainThread(() => _consolePage.BackButtonVisible = true);
+        }
+
+        return outputZip;
+    }
+
+    public static async Task<string?> BeginRepairPatchedApk(string inputApkPath, string outputApkPath, string? localUnityDepsPath = null)
+    {
+        if (_isPatching)
+            return null;
+
+        _isPatching = true;
+        string? finalPath = null;
+
+        try
+        {
+            Reset();
+            await PrepareConsoleAsync("Repairing Patched APK...");
+
+            await Task.Run(async () =>
+            {
+                string repairedBundle = ActiveRepairedMelonDataPath != null && File.Exists(ActiveRepairedMelonDataPath)
+                    ? ActiveRepairedMelonDataPath
+                    : await LemonLoaderRepairer.ResolveOrDownloadRepairedBundleAsync(_logger!);
+
+                var report = LemonLoaderRepairer.RepairPatchedApk(inputApkPath, outputApkPath, repairedBundle, localUnityDepsPath, _logger!);
+                if (!report.IsHealthy)
+                    throw new InvalidOperationException("Repaired APK still has critical diagnostic issues.");
+
+                finalPath = outputApkPath;
+                LastPatchedApkPath = outputApkPath;
+            });
+
+            await MainThread.InvokeOnMainThreadAsync(async () =>
+                await PopupHelper.Alert($"Successfully repaired & signed APK:\n{finalPath}", "Repair Complete"));
+        }
+        catch (Exception ex)
+        {
+            _logger?.Log("[ERROR] " + ex);
+            await MainThread.InvokeOnMainThreadAsync(async () =>
+                await PopupHelper.Alert($"APK repair failed: {ex.Message}", "Repair Failed"));
+        }
+        finally
+        {
+            _isPatching = false;
+            if (_consolePage != null)
+                MainThread.BeginInvokeOnMainThread(() => _consolePage.BackButtonVisible = true);
+        }
+
+        return finalPath;
+    }
+
+    public static async Task<bool> BeginSignApk(string inputApkPath, string outputApkPath)
+    {
+        if (_isPatching)
+            return false;
+
+        _isPatching = true;
+        bool ok = false;
+
+        try
+        {
+            Reset();
+            await PrepareConsoleAsync("Signing APK...");
+
+            await Task.Run(() =>
+            {
+                StandaloneApkSigner.SignApk(inputApkPath, outputApkPath, _logger!);
+                ok = ApkAnalyzer.HasApkV2SignatureBlock(outputApkPath);
+                _logger?.Log($"V2 Signature Block Present: {ok}");
+                if (ok)
+                    LastPatchedApkPath = outputApkPath;
+            });
+
+            await MainThread.InvokeOnMainThreadAsync(async () =>
+                await PopupHelper.Alert(ok ? $"APK aligned and V2-signed:\n{outputApkPath}" : "APK signing failed.", ok ? "Success" : "Failure"));
+        }
+        catch (Exception ex)
+        {
+            _logger?.Log("[ERROR] " + ex);
+            await MainThread.InvokeOnMainThreadAsync(async () =>
+                await PopupHelper.Alert($"Signing failed: {ex.Message}", "Failure"));
+        }
+        finally
+        {
+            _isPatching = false;
+            if (_consolePage != null)
+                MainThread.BeginInvokeOnMainThread(() => _consolePage.BackButtonVisible = true);
+        }
+
+        return ok;
+    }
+
     public static async Task Begin(UnityApplicationFinder.Data data, string? localUnityDepsPath)
     {
         _isPatching = true;
@@ -34,19 +327,11 @@ public static class PatchRunner
         {
             Reset();
 
-            await Shell.Current.GoToAsync(nameof(PatchingConsolePage));
-            _consolePage = (PatchingConsolePage)Shell.Current.CurrentPage;
+            await PrepareConsoleAsync("Patching...");
 
-#if ANDROID
-            _basePath = Path.Combine(Android.OS.Environment.ExternalStorageDirectory!.ToString(), "MelonLoader.Installer.App");
-#else
-            _basePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MelonLoader.Installer.App");
-#endif
-
-            _logger = new(_consolePage, _basePath);
-            _logger?.Log($"Created Log File [ {_logger.LogPath} ]");
-
-            string packageName = data.Source == UnityApplicationFinder.Source.File ? "LocalFile" : data.PackageName;
+            string packageName = data.Source == UnityApplicationFinder.Source.File
+                ? (string.IsNullOrWhiteSpace(data.PackageName) ? "LocalFile" : data.PackageName)
+                : data.PackageName;
             _tempPath = Path.Combine(_basePath, "patch_temp", packageName);
 
             _melonDataPath = Path.Combine(_tempPath, "melondata.zip");
@@ -68,7 +353,8 @@ public static class PatchRunner
         }
 
         _isPatching = false;
-        _consolePage!.BackButtonVisible = true;
+        if (_consolePage != null)
+            MainThread.BeginInvokeOnMainThread(() => _consolePage.BackButtonVisible = true);
     }
 
     private static async Task InternalBegin(UnityApplicationFinder.Data data, string? localUnityDepsPath)
@@ -76,7 +362,7 @@ public static class PatchRunner
         _logger?.Log($"Build Directory: [ {_basePath} ]");
 
         if (Directory.Exists(_tempPath))
-            Directory.Delete(_tempPath);
+            Directory.Delete(_tempPath, true);
 
         await PrepareAssets(localUnityDepsPath);
 
@@ -108,18 +394,7 @@ public static class PatchRunner
         try
         {
             Reset();
-
-#if ANDROID
-            _basePath = Path.Combine(Android.OS.Environment.ExternalStorageDirectory!.ToString(), "MelonLoader.Installer.App");
-#else
-            _basePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MelonLoader.Installer.App");
-#endif
-
-            await Shell.Current.GoToAsync(nameof(PatchingConsolePage));
-            _consolePage = (PatchingConsolePage)Shell.Current.CurrentPage;
-            _logger = new(_consolePage, _basePath);
-
-            _consolePage.Title = "Restoring...";
+            await PrepareConsoleAsync("Restoring...");
 
             Task task = Task.Run(async () => await InternalBeginRestore(data));
             await task;
@@ -132,7 +407,8 @@ public static class PatchRunner
         }
 
         _isPatching = false;
-        _consolePage!.BackButtonVisible = true;
+        if (_consolePage != null)
+            MainThread.BeginInvokeOnMainThread(() => _consolePage.BackButtonVisible = true);
     }
 
     private static async Task InternalBeginRestore(UnityApplicationFinder.Data data)
@@ -143,10 +419,7 @@ public static class PatchRunner
         if (backupDir == null)
             return;
 
-        bool failed = false;
-
-        APKInstaller installer = new(data,
-            _logger!);
+        APKInstaller installer = new(data, _logger!);
 
         if (await installer.Install(backupDir))
         {
@@ -196,33 +469,55 @@ public static class PatchRunner
             _logger?.Log("Local dependencies provided; copied");
         }
 
-        _logger?.Log("Downloading MelonLoader data");
+        _logger?.Log("Preparing repaired LemonLoader data");
 
         if (!await DownloadMelonData(_melonDataPath))
-            throw new Exception("Failed to download MelonLoader data");
+            throw new Exception("Failed to obtain MelonLoader data");
     }
 
     private static async Task<bool> DownloadMelonData(string destination)
     {
+        // 1. Prefer user-selected or verified repaired bundle
+        if (!string.IsNullOrEmpty(ActiveRepairedMelonDataPath) && File.Exists(ActiveRepairedMelonDataPath))
+        {
+            var check = LemonDataDiagnostics.Inspect(ActiveRepairedMelonDataPath);
+            if (check.IsHealthy)
+            {
+                _logger?.Log($"Using active repaired LemonLoader bundle [ {ActiveRepairedMelonDataPath} ]");
+                File.Copy(ActiveRepairedMelonDataPath, destination, overwrite: true);
+                return true;
+            }
+        }
+
+        try
+        {
+            string repaired = await LemonLoaderRepairer.ResolveOrDownloadRepairedBundleAsync(_logger!);
+            ActiveRepairedMelonDataPath = repaired;
+            File.Copy(repaired, destination, overwrite: true);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger?.Log($"Repaired bundle not yet available ({ex.Message}). Checking official LemonLoader release...");
+        }
+
 #if DEBUG
         if (File.Exists(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "melon_data/melon_data.zip")))
         {
             _logger?.Log("Using local melon data");
-
-            File.Copy(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "melon_data/melon_data.zip"), destination);
+            File.Copy(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "melon_data/melon_data.zip"), destination, true);
             return true;
         }
 
         if (File.Exists(@"/sdcard/Download/melon_data.zip"))
         {
             _logger?.Log("Using local melon data");
-
-            File.Copy(@"/sdcard/Download/melon_data.zip", destination);
+            File.Copy(@"/sdcard/Download/melon_data.zip", destination, true);
             return true;
         }
 #endif
 
-        _logger?.Log("Retrieving release info from GitHub");
+        _logger?.Log("Retrieving release info from GitHub (LemonLoader/MelonLoader)");
 
         try
         {
@@ -238,6 +533,13 @@ public static class PatchRunner
             _logger?.Log($"Downloading [ {assetUrl} ]");
             byte[] data = await client.GetByteArrayAsync(assetUrl);
             await File.WriteAllBytesAsync(destination, data);
+
+            var diag = LemonDataDiagnostics.Inspect(destination);
+            _logger?.Log(diag.FormatReport());
+            if (!diag.IsHealthy)
+            {
+                _logger?.Log("[WARNING] Downloaded upstream melon_data.zip contains known 0.6.5 defects. Use 'Repair LemonLoader' with a repaired bundle to avoid runtime crashes.");
+            }
             _logger?.Log("Done");
         }
         catch (Exception ex)
@@ -315,7 +617,7 @@ public static class PatchRunner
             extraSplits = data.APKPaths.Skip(1).Where(p => !p.Contains("arm64")).Select(p => Path.Combine(_apkOutputPath, Path.GetFileName(p))).ToArray();
         }
 
-        PatchArguments arguments = new(targetApkPath, libraryApkPath, extraSplits, _apkOutputPath, _tempPath, _melonDataPath, _unityDepsPath, _unityVersion, data.PackageName, data.APKPaths.Length > 1);   
+        PatchArguments arguments = new(targetApkPath, libraryApkPath, extraSplits, _apkOutputPath, _tempPath, _melonDataPath, _unityDepsPath, _unityVersion, data.PackageName, data.APKPaths.Length > 1);
         Patcher patcher = new(arguments, _logger!);
 
         if (!patcher.Run())
@@ -328,14 +630,13 @@ public static class PatchRunner
 
     private static async Task BackupAppData(UnityApplicationFinder.Data data)
     {
-        // backing up files on-device on most recent android versions is a massive pain, if not impossible
         if (data.Source != UnityApplicationFinder.Source.ADB)
             return;
 
         _logger?.Log("Backing up app data, this can take awhile");
 
         string src = $"/sdcard/Android/data/{data.PackageName}";
-        string dest = Path.Combine(_tempPath, "data_backup"); // the package name isnt here due to how adb handles pulling
+        string dest = Path.Combine(_tempPath, "data_backup");
 
         try
         {
@@ -359,20 +660,8 @@ public static class PatchRunner
 
     private static async Task RestoreAppData(UnityApplicationFinder.Data data)
     {
-        // backing up files on-device on most recent android versions is a massive pain, if not impossible
         if (data.Source != UnityApplicationFinder.Source.ADB)
             return;
-
-        // I tried so many things and all of them caused permission issues.
-        // At this point, I give up and will let users restore it themselves.
-
-        /*_logger?.Log("Restoring app data, this can take awhile");
-
-        string src = Path.Combine(_tempPath, "data_backup", $"{data.PackageName}");
-        string dest = $"/sdcard/Android/data/"; // the package name isnt here due to how adb handles pushing
-
-        await ADBManager.PushDirectoryToDevice(src, dest, _logger);
-        await ADBManager.AttemptPermissionReset($"/sdcard/Android/data/{data.PackageName}");*/
 
         _logger?.Log("Restoring app assets (OBBs), this can take awhile");
 
@@ -382,8 +671,6 @@ public static class PatchRunner
         await ADBManager.TryMoveUsingScript(src, dest);
 
         _logger?.Log("Asset restore complete");
-
-        // ask about game data
 
         string dataBackupPath = Path.Combine(_tempPath, "data_backup", $"{data.PackageName}");
         if (Directory.Exists(dataBackupPath) && Directory.GetFileSystemEntries(dataBackupPath).Length > 0)
@@ -396,10 +683,10 @@ public static class PatchRunner
                     Process proc = new()
                     {
                         StartInfo =
-                    {
-                        FileName = "explorer.exe",
-                        Arguments = $"/select,\"{dataBackupPath}\""
-                    }
+                        {
+                            FileName = "explorer.exe",
+                            Arguments = $"/select,\"{dataBackupPath}\""
+                        }
                     };
 
                     proc.Start();
@@ -416,24 +703,36 @@ public static class PatchRunner
             _logger?.Log("APK patched successfully, moving to final path");
 
             string originalPath = data.APKPaths.First();
-            string newPatchedPath = Path.Combine(Path.GetDirectoryName(originalPath)!, Path.GetFileNameWithoutExtension(originalPath) + "_patched.apk");
-            string patchedPath = Directory.GetFiles(_apkOutputPath).First();
-
-            File.Move(patchedPath, newPatchedPath, true);
-
-            _logger?.Log($"Patched APK saved [ {patchedPath} ]");
-
-
-            Process proc = new()
+            string[] outputApks = Directory.GetFiles(_apkOutputPath, "*.apk");
+            if (outputApks.Length == 1)
             {
-                StartInfo =
-                {
-                    FileName = "explorer.exe",
-                    Arguments = $"/select,\"{newPatchedPath}\""
-                }
-            };
+                string newPatchedPath = Path.Combine(Path.GetDirectoryName(originalPath)!, Path.GetFileNameWithoutExtension(originalPath) + "_patched.apk");
+                File.Move(outputApks[0], newPatchedPath, true);
+                LastPatchedApkPath = newPatchedPath;
+                _logger?.Log($"Patched APK saved [ {newPatchedPath} ]");
 
-            proc.Start();
+                var diag = LemonDataDiagnostics.Inspect(newPatchedPath);
+                _logger?.Log(diag.FormatReport());
+
+                Process proc = new()
+                {
+                    StartInfo =
+                    {
+                        FileName = "explorer.exe",
+                        Arguments = $"/select,\"{newPatchedPath}\""
+                    }
+                };
+                proc.Start();
+            }
+            else
+            {
+                string outFolder = Path.Combine(Path.GetDirectoryName(originalPath)!, Path.GetFileNameWithoutExtension(originalPath) + "_patched_splits");
+                Directory.CreateDirectory(outFolder);
+                foreach (var apk in outputApks)
+                    File.Move(apk, Path.Combine(outFolder, Path.GetFileName(apk)), true);
+                LastPatchedApkPath = Path.Combine(outFolder, "base.apk");
+                _logger?.Log($"Patched split APKs saved to [ {outFolder} ]");
+            }
 #else
             _logger?.Log("APK patched successfully.");
             _logger?.Log($"Patched APK(s) are available at [ {_apkOutputPath} ]");
@@ -484,6 +783,7 @@ public static class PatchRunner
         _apkOutputPath = "";
         _unityDepsPath = "";
         _unityVersion = UnityVersion.MinVersion;
+        LastConsoleText = "";
     }
 
     public class PatchLogger : IPatchLogger
@@ -514,6 +814,7 @@ public static class PatchRunner
 
         public void Clear()
         {
+            LastConsoleText = "";
             Application.Current!.Dispatcher.Dispatch(() => _consolePage.Log = "");
         }
 
@@ -521,6 +822,7 @@ public static class PatchRunner
         {
             Debug.WriteLine(message);
             _writer.WriteLine(message);
+            LastConsoleText += message + '\n';
             Application.Current!.Dispatcher.Dispatch(() => _consolePage.Log += message + '\n');
         }
     }

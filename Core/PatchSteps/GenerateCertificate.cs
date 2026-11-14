@@ -1,4 +1,4 @@
-﻿using Org.BouncyCastle.Asn1.X509;
+using Org.BouncyCastle.Asn1.X509;
 using Org.BouncyCastle.Crypto.Generators;
 using Org.BouncyCastle.Crypto;
 using Org.BouncyCastle.Security;
@@ -49,7 +49,7 @@ IAE6kTSMMHC6bVbrbS/CC8hRW8m7yD3LUa1EjFJmRWXsCQ==
         patcher.Logger.Log("Generating certificate");
 
         RsaKeyPairGenerator kpg = new();
-        kpg.Init(new KeyGenerationParameters(SecureRandom.GetInstance("SHA256PRNG"), 1024));
+        kpg.Init(new KeyGenerationParameters(SecureRandom.GetInstance("SHA256PRNG"), 2048));
 
         AsymmetricCipherKeyPair keyPair = kpg.GenerateKeyPair();
 
@@ -60,8 +60,8 @@ IAE6kTSMMHC6bVbrbS/CC8hRW8m7yD3LUa1EjFJmRWXsCQ==
         certificateGenerator.SetSerialNumber(serialNumber);
         certificateGenerator.SetIssuerDN(issuerDN);
         certificateGenerator.SetSubjectDN(subjectDN);
-        certificateGenerator.SetNotBefore(DateTime.UtcNow.Date.AddYears(-999));
-        certificateGenerator.SetNotAfter(DateTime.UtcNow.Date.AddYears(999));
+        certificateGenerator.SetNotBefore(DateTime.UtcNow.Date.AddDays(-1));
+        certificateGenerator.SetNotAfter(DateTime.UtcNow.Date.AddYears(30));
         certificateGenerator.SetPublicKey(keyPair.Public);
 
         SubjectKeyIdentifierStructure subjectKeyIdentifierExtension = new(keyPair.Public);

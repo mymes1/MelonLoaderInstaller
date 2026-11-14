@@ -3,8 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              x:Class="MelonLoader.Installer.App.Views.PatchAppPage"
              xmlns:toolkit="http://schemas.microsoft.com/dotnet/2022/maui/toolkit"
-             xmlns:local="clr-namespace:MelonLoader.Installer.App.Views"
-             xmlns:viewmodels="clr-namespace:MelonLoader.Installer.App.ViewModels">
+             xmlns:local="clr-namespace:MelonLoader.Installer.App.Views">
 
     <ContentPage.Resources>
         <ResourceDictionary>
@@ -12,130 +11,235 @@
         </ResourceDictionary>
     </ContentPage.Resources>
 
-    <ContentPage.BindingContext>
-        <viewmodels:PermissionSetupPageViewModel />
-    </ContentPage.BindingContext>
+    <ScrollView>
+        <VerticalStackLayout Spacing="10" Padding="0,0,0,20">
+            <Label Text="Patcher &amp; LemonLoader Repair"
+                   FontSize="Title"
+                   FontAttributes="Bold"
+                   TextColor="{StaticResource Light}"
+                   Padding="25,20,25,10" />
 
-    <Grid RowDefinitions="Auto, Auto, Auto, *">
-        <Label Grid.Row="0"
-               Text="Patcher"
-               FontSize="Title"
-               FontAttributes="Bold"
-               TextColor="{StaticResource Light}"
-               Padding="25" />
-        <Border Grid.Row="1"
-                x:Name="AppDisplay"
-                Stroke="{StaticResource Primary}"
-                Background="{StaticResource Primary}"
-                StrokeShape="RoundRectangle 15,15,15,15"
-                Padding="10"
-                Margin="20,0,20,10">
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                </Grid.RowDefinitions>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="100" />
-                    <ColumnDefinition Width="*" />
-                </Grid.ColumnDefinitions>
-                <Image Grid.RowSpan="2"
-                       Source="{Binding RawIconData, Mode=OneWay, Converter={StaticResource ByteArrayToImageSourceConverter}}"
-                       Aspect="AspectFill"
-                       HeightRequest="60"
-                       WidthRequest="60" />
+            <Border x:Name="AppDisplay"
+                    Stroke="{StaticResource Primary}"
+                    Background="{StaticResource Primary}"
+                    StrokeShape="RoundRectangle 15,15,15,15"
+                    Padding="12"
+                    Margin="20,0,20,0">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="90" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Image Grid.RowSpan="2"
+                           Source="{Binding RawIconData, Mode=OneWay, Converter={StaticResource ByteArrayToImageSourceConverter}}"
+                           Aspect="AspectFill"
+                           HeightRequest="60"
+                           WidthRequest="60" />
 
-                <Label Grid.Column="1"
-                       LineBreakMode="HeadTruncation">
-                    <Label.FormattedText>
-                        <FormattedString>
-                            <Span Text="{Binding AppName}"
-                                  TextColor="{StaticResource Light}"
-                                  FontAttributes="Bold" />
-                            <Span Text="{Binding StatusString}"
-                                  TextColor="{StaticResource ExtraLight}" />
-                        </FormattedString>
-                    </Label.FormattedText>
-                </Label>
+                    <Label Grid.Column="1"
+                           LineBreakMode="TailTruncation">
+                        <Label.FormattedText>
+                            <FormattedString>
+                                <Span Text="{Binding AppName}"
+                                      TextColor="{StaticResource Light}"
+                                      FontAttributes="Bold" />
+                                <Span Text="{Binding StatusString}"
+                                      TextColor="{StaticResource ExtraLight}" />
+                            </FormattedString>
+                        </Label.FormattedText>
+                    </Label>
 
-                <Label Grid.Row="1"
-                       Grid.Column="1"
-                       Text="{Binding PackageName}"
-                       FontAttributes="Italic"
-                       LineBreakMode="TailTruncation" />
+                    <Label Grid.Row="1"
+                           Grid.Column="1"
+                           Text="{Binding PackageName}"
+                           TextColor="{StaticResource ExtraLight}"
+                           FontAttributes="Italic"
+                           LineBreakMode="TailTruncation" />
+                </Grid>
+            </Border>
+
+            <Border Stroke="{StaticResource Primary}"
+                    Background="{StaticResource Primary}"
+                    StrokeShape="RoundRectangle 15,15,15,15"
+                    Padding="12"
+                    Margin="20,0,20,0">
+                <VerticalStackLayout Spacing="4">
+                    <Label Text="APK &amp; Dependency Status"
+                           FontSize="Small"
+                           FontAttributes="Bold"
+                           TextColor="{StaticResource Light}" />
+                    <Label Text="{Binding DiagnosticSummary}"
+                           FontSize="Caption"
+                           TextColor="{StaticResource ExtraLight}"
+                           LineBreakMode="WordWrap" />
+                </VerticalStackLayout>
+            </Border>
+
+            <!-- Primary Actions -->
+            <Grid ColumnDefinitions="*,*" ColumnSpacing="10" Margin="20,0,20,0">
+                <Border Grid.Column="0"
+                        Stroke="{StaticResource Primary}"
+                        Background="{StaticResource Primary}"
+                        StrokeShape="RoundRectangle 15,15,15,15"
+                        Padding="10">
+                    <Border.GestureRecognizers>
+                        <TapGestureRecognizer Command="{Binding SelectApkCommand}" />
+                    </Border.GestureRecognizers>
+                    <Label Text="Select APK / Bundle"
+                           TextColor="{StaticResource Light}"
+                           FontSize="Small"
+                           HorizontalTextAlignment="Center" />
+                </Border>
+                <Border Grid.Column="1"
+                        Stroke="{StaticResource Primary}"
+                        Background="{StaticResource Primary}"
+                        StrokeShape="RoundRectangle 15,15,15,15"
+                        Padding="10">
+                    <Border.GestureRecognizers>
+                        <TapGestureRecognizer Command="{Binding AnalyzeApkCommand}" />
+                    </Border.GestureRecognizers>
+                    <Label Text="Analyze APK (Unity &amp; ABI)"
+                           TextColor="{StaticResource Light}"
+                           FontSize="Small"
+                           HorizontalTextAlignment="Center" />
+                </Border>
             </Grid>
-        </Border>
-        <Border Grid.Row="2"
-                Stroke="{StaticResource Light}"
-                Background="{StaticResource Light}"
-                StrokeShape="RoundRectangle 15,15,15,15"
-                Padding="10"
-                Margin="20,0,20,10">
-            <Border.GestureRecognizers>
-                <TapGestureRecognizer Command="{Binding Source={RelativeSource AncestorType={x:Type local:PatchAppPage}}, Path=BindingContext.PatchTappedCommand}"
-                                      CommandParameter="{Binding}" />
-            </Border.GestureRecognizers>
 
-            <Label Text="Patch"
-                   TextColor="{StaticResource Primary}"
-                   FontSize="Small"
-                   HorizontalTextAlignment="Center" />
-        </Border>
+            <Grid ColumnDefinitions="*,*" ColumnSpacing="10" Margin="20,0,20,0">
+                <Border Grid.Column="0"
+                        Stroke="{StaticResource Primary}"
+                        Background="{StaticResource Primary}"
+                        StrokeShape="RoundRectangle 15,15,15,15"
+                        Padding="10">
+                    <Border.GestureRecognizers>
+                        <TapGestureRecognizer Command="{Binding DiagnoseLemonCommand}" />
+                    </Border.GestureRecognizers>
+                    <Label Text="Diagnose LemonLoader"
+                           TextColor="{StaticResource Light}"
+                           FontSize="Small"
+                           HorizontalTextAlignment="Center" />
+                </Border>
+                <Border Grid.Column="1"
+                        Stroke="{StaticResource Primary}"
+                        Background="{StaticResource Primary}"
+                        StrokeShape="RoundRectangle 15,15,15,15"
+                        Padding="10">
+                    <Border.GestureRecognizers>
+                        <TapGestureRecognizer Command="{Binding RepairLemonCommand}" />
+                    </Border.GestureRecognizers>
+                    <Label Text="Repair LemonLoader"
+                           TextColor="{StaticResource Light}"
+                           FontSize="Small"
+                           HorizontalTextAlignment="Center" />
+                </Border>
+            </Grid>
 
-        <Grid Grid.Row="3"
-              RowDefinitions="Auto, Auto, Auto"
-              VerticalOptions="EndAndExpand">
-            <Border  x:Name="CustomPatchButton"
-                     Grid.Row="0"
-                     Stroke="{StaticResource Primary}"
-                     Background="{StaticResource Primary}"
-                     StrokeShape="RoundRectangle 15,15,15,15"
-                     Padding="10"
-                     Margin="20,0,20,10">
+            <Border Stroke="{StaticResource Light}"
+                    Background="{StaticResource Light}"
+                    StrokeShape="RoundRectangle 15,15,15,15"
+                    Padding="12"
+                    Margin="20,0,20,0">
                 <Border.GestureRecognizers>
-                    <TapGestureRecognizer Command="{Binding Source={RelativeSource AncestorType={x:Type local:PatchAppPage}}, Path=BindingContext.CustomPatchCommand}"
-                                          CommandParameter="{Binding}" />
+                    <TapGestureRecognizer Command="{Binding PatchTappedCommand}" />
                 </Border.GestureRecognizers>
+                <Label Text="Patch APK"
+                       TextColor="{StaticResource Primary}"
+                       FontAttributes="Bold"
+                       FontSize="Small"
+                       HorizontalTextAlignment="Center" />
+            </Border>
 
+            <Grid ColumnDefinitions="*,*" ColumnSpacing="10" Margin="20,0,20,0">
+                <Border Grid.Column="0"
+                        Stroke="{StaticResource Primary}"
+                        Background="{StaticResource Primary}"
+                        StrokeShape="RoundRectangle 15,15,15,15"
+                        Padding="10">
+                    <Border.GestureRecognizers>
+                        <TapGestureRecognizer Command="{Binding SignApkCommand}" />
+                    </Border.GestureRecognizers>
+                    <Label Text="Sign APK (V2)"
+                           TextColor="{StaticResource Light}"
+                           FontSize="Small"
+                           HorizontalTextAlignment="Center" />
+                </Border>
+                <Border Grid.Column="1"
+                        Stroke="{StaticResource Primary}"
+                        Background="{StaticResource Primary}"
+                        StrokeShape="RoundRectangle 15,15,15,15"
+                        Padding="10">
+                    <Border.GestureRecognizers>
+                        <TapGestureRecognizer Command="{Binding SavePatchedApkCommand}" />
+                    </Border.GestureRecognizers>
+                    <Label Text="Save Patched APK"
+                           TextColor="{StaticResource Light}"
+                           FontSize="Small"
+                           HorizontalTextAlignment="Center" />
+                </Border>
+            </Grid>
+
+            <Border Stroke="{StaticResource Primary}"
+                    Background="{StaticResource Primary}"
+                    StrokeShape="RoundRectangle 15,15,15,15"
+                    Padding="10"
+                    Margin="20,0,20,0">
+                <Border.GestureRecognizers>
+                    <TapGestureRecognizer Command="{Binding ViewLogsCommand}" />
+                </Border.GestureRecognizers>
+                <Label Text="View Detailed Logs"
+                       TextColor="{StaticResource ExtraLight}"
+                       FontSize="Small"
+                       HorizontalTextAlignment="Center" />
+            </Border>
+
+            <Border x:Name="CustomPatchButton"
+                    Stroke="{StaticResource Primary}"
+                    Background="{StaticResource Primary}"
+                    StrokeShape="RoundRectangle 15,15,15,15"
+                    Padding="10"
+                    Margin="20,0,20,0">
+                <Border.GestureRecognizers>
+                    <TapGestureRecognizer Command="{Binding CustomPatchCommand}" />
+                </Border.GestureRecognizers>
                 <Label Text="Add or Remove Custom Patches"
                        TextColor="{StaticResource Light}"
                        FontSize="Small"
                        HorizontalTextAlignment="Center" />
             </Border>
-            <Border  x:Name="PatchLocalButton"
-                     Grid.Row="1"
-                     Stroke="{StaticResource Primary}"
-                     Background="{StaticResource Primary}"
-                     StrokeShape="RoundRectangle 15,15,15,15"
-                     Padding="10"
-                     Margin="20,0,20,10">
-                <Border.GestureRecognizers>
-                    <TapGestureRecognizer Command="{Binding Source={RelativeSource AncestorType={x:Type local:PatchAppPage}}, Path=BindingContext.PatchLocalTappedCommand}"
-                                          CommandParameter="{Binding}" />
-                </Border.GestureRecognizers>
 
+            <Border x:Name="PatchLocalButton"
+                    Stroke="{StaticResource Primary}"
+                    Background="{StaticResource Primary}"
+                    StrokeShape="RoundRectangle 15,15,15,15"
+                    Padding="10"
+                    Margin="20,0,20,0">
+                <Border.GestureRecognizers>
+                    <TapGestureRecognizer Command="{Binding PatchLocalTappedCommand}" />
+                </Border.GestureRecognizers>
                 <Label Text="Patch with Local Unity Dependencies"
                        TextColor="{StaticResource Light}"
                        FontSize="Small"
                        HorizontalTextAlignment="Center" />
             </Border>
-            <Border  x:Name="RestoreAPKButton"
-                     Grid.Row="2"
-                     Stroke="{StaticResource Primary}"
-                     Background="{StaticResource Primary}"
-                     StrokeShape="RoundRectangle 15,15,15,15"
-                     Padding="10"
-                     Margin="20,0,20,10">
-                <Border.GestureRecognizers>
-                    <TapGestureRecognizer Command="{Binding Source={RelativeSource AncestorType={x:Type local:PatchAppPage}}, Path=BindingContext.RestoreTappedCommand}"
-                                          CommandParameter="{Binding}" />
-                </Border.GestureRecognizers>
 
+            <Border x:Name="RestoreAPKButton"
+                    Stroke="{StaticResource Primary}"
+                    Background="{StaticResource Primary}"
+                    StrokeShape="RoundRectangle 15,15,15,15"
+                    Padding="10"
+                    Margin="20,0,20,0">
+                <Border.GestureRecognizers>
+                    <TapGestureRecognizer Command="{Binding RestoreTappedCommand}" />
+                </Border.GestureRecognizers>
                 <Label Text="Restore Unpatched APK"
                        TextColor="{StaticResource Light}"
                        FontSize="Small"
                        HorizontalTextAlignment="Center" />
             </Border>
-        </Grid>
-    </Grid>
+        </VerticalStackLayout>
+    </ScrollView>
 </ContentPage>

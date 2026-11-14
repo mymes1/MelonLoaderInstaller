@@ -1,8 +1,9 @@
-﻿using MelonLoader.Installer.App.Utils;
+using MelonLoader.Installer.App.Utils;
 using MelonLoader.Installer.App.Views;
 using MelonLoader.Installer.Core;
+using MelonLoader.Installer.Core.Diagnostics;
+using MelonLoader.Installer.Core.Repair;
 using System.Collections.ObjectModel;
-using System.IO.Compression;
 using System.Windows.Input;
 
 namespace MelonLoader.Installer.App.ViewModels;
@@ -31,7 +32,7 @@ public class MainPageViewModel : BindableObject
         {
             ADBManager.OnPrimaryDeviceChanged += StartNewAppSearchThread;
         }
-        catch { } // this throws a null-ref on Android for some reason
+        catch { }
 
         StartNewAppSearchThread();
     }
@@ -76,70 +77,101 @@ public class MainPageViewModel : BindableObject
     {
         FilePickerFileType apkType = new(new Dictionary<DevicePlatform, IEnumerable<string>>
         {
-            { DevicePlatform.Android, [ "application/vnd.android.package-archive" ] },
-            { DevicePlatform.WinUI, [ ".apk" ] }
+            { DevicePlatform.Android, [ "application/vnd.android.package-archive", "application/zip" ] },
+            { DevicePlatform.WinUI, [ ".apk", ".apks", ".xapk", ".zip" ] }
         });
 
         try
         {
-            var result = await FilePicker.Default.PickAsync(new PickOptions() { FileTypes = apkType });
-            if (result != null)
+            var result = await FilePicker.Default.PickAsync(new PickOptions()
             {
-                try
-                {
-                    using FileStream apkStream = new(result.FullPath, FileMode.Open);
-                    using ZipArchive archive = new(apkStream, ZipArchiveMode.Read);
+                FileTypes = apkType,
+                PickerTitle = "Select Android APK or Split Bundle (.apk / .apks / .xapk)"
+            });
 
-                    bool hasArm64Dir = archive.Entries.Any(a => a.FullName.Contains("arm64-v8a"));
+            if (result == null)
+                return;
 
-                    if (!hasArm64Dir)
-                    {
-                        await PopupHelper.Toast("Selected APK does not support ARM64 and cannot be patched.");
-                        return;
-                    }
+            var appData = await LoadAppDataFromFileAsync(result.FullPath);
+            if (appData == null)
+                return;
 
-                    var unityLib = archive.GetEntry("lib/arm64-v8a/libunity.so");
-                    var il2cppLib = archive.GetEntry("lib/arm64-v8a/libil2cpp.so");
-
-                    if (unityLib == null)
-                    {
-                        await PopupHelper.Toast("Selected APK is not a Unity app and cannot be patched.");
-                        return;
-                    }
-
-                    if (il2cppLib == null)
-                    {
-                        await PopupHelper.Toast("Selected APK is not IL2CPP and cannot be patched.");
-                        return;
-                    }
-                }
-                catch (IOException ex)
-                {
-                    await PopupHelper.Toast("Failed to access the selected APK.");
-
-                    System.Diagnostics.Debug.WriteLine(ex);
-
-                    return;
-                }
-                catch (Exception ex)
-                {
-                    await PopupHelper.Toast("Selected APK is invalid or unsupported.");
-
-                    System.Diagnostics.Debug.WriteLine(ex);
-
-                    return;
-                }
-
-                Plugin.ClearPlugins();
-
-                UnityApplicationFinder.Data data = new(Path.GetFileNameWithoutExtension(result.FullPath), "", UnityApplicationFinder.Status.Unpatched, UnityApplicationFinder.Source.File, [result.FullPath], null);
-                PatchAppPageViewModel.CurrentAppData = data;
-                Shell.Current.GoToTabOnFirst(nameof(PatchAppPage));
-            }
+            Plugin.ClearPlugins();
+            PatchAppPageViewModel.CurrentAppData = appData;
+            Shell.Current.GoToTabOnFirst(nameof(PatchAppPage));
         }
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine(ex);
+        }
+    }
+
+    public static async Task<UnityApplicationFinder.Data?> LoadAppDataFromFileAsync(string filePath)
+    {
+        try
+        {
+            string[] apkPaths;
+            if (SplitApkBundleExtractor.IsBundleArchive(filePath))
+            {
+                string extractDir = Path.Combine(
+                    PatchRunner.GetBaseAppDataPath(),
+                    "split_extract",
+                    Path.GetFileNameWithoutExtension(filePath));
+                var extracted = await Task.Run(() => SplitApkBundleExtractor.Extract(filePath, extractDir));
+                apkPaths = extracted.AllApkPaths;
+            }
+            else
+            {
+                apkPaths = [filePath];
+            }
+
+            var report = await Task.Run(() => ApkAnalyzer.Analyze(apkPaths));
+
+            if (!report.HasArm64)
+            {
+                await PopupHelper.Toast("Selected APK does not support ARM64 (arm64-v8a) and cannot be patched.");
+                return null;
+            }
+
+            if (!report.HasLibUnity)
+            {
+                await PopupHelper.Toast("Selected APK is not a Unity app (missing libunity.so).");
+                return null;
+            }
+
+            if (!report.HasLibIl2Cpp)
+            {
+                await PopupHelper.Toast("Selected APK is not IL2CPP (missing libil2cpp.so).");
+                return null;
+            }
+
+            var status = report.IsLemonPatched
+                ? UnityApplicationFinder.Status.Patched
+                : UnityApplicationFinder.Status.Unpatched;
+
+            string displayName = string.IsNullOrWhiteSpace(report.PackageName)
+                ? Path.GetFileNameWithoutExtension(filePath)
+                : $"{Path.GetFileNameWithoutExtension(filePath)} (Unity {report.UnityVersionString})";
+
+            return new UnityApplicationFinder.Data(
+                displayName,
+                report.PackageName,
+                status,
+                UnityApplicationFinder.Source.File,
+                apkPaths,
+                null);
+        }
+        catch (IOException ex)
+        {
+            await PopupHelper.Toast("Failed to access the selected APK.");
+            System.Diagnostics.Debug.WriteLine(ex);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            await PopupHelper.Toast($"Selected APK is invalid or unsupported: {ex.Message}");
+            System.Diagnostics.Debug.WriteLine(ex);
+            return null;
         }
     }
 
@@ -154,7 +186,6 @@ public class MainPageViewModel : BindableObject
         if (!AndroidPermissionHandler.HaveRequired())
         {
             await PopupHelper.Toast("Permissions are not setup.");
-
             Shell.Current.GoToTabOnFirst(nameof(PermissionSetupPage));
             return;
         }

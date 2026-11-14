@@ -1,0 +1,123 @@
+name: Build and Test LemonLoader Repair Tool
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-repaired-lemonloader:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Setup Rust stable + aarch64-linux-android
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Build repaired LemonLoader melon_data_repaired.zip from official fork sources
+        run: |
+          chmod +x RepairPatches/build_lemon_repaired.sh
+          bash RepairPatches/build_lemon_repaired.sh "$RUNNER_TEMP/lemon_build" "$GITHUB_WORKSPACE/melon_data_repaired.zip"
+
+      - name: Diagnose freshly built melon_data_repaired.zip using Repair CLI
+        run: |
+          dotnet run --project Cli/MelonLoader.Installer.Cli.csproj -c Release -- diagnose "$GITHUB_WORKSPACE/melon_data_repaired.zip"
+
+      - name: Upload melon_data_repaired.zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: melon_data_repaired
+          path: melon_data_repaired.zip
+
+  test-linux:
+    runs-on: ubuntu-latest
+    needs: [ build-repaired-lemonloader ]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Download repaired LemonLoader bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: melon_data_repaired
+          path: .
+
+      - name: Build Core, CLI, and Tests
+        run: |
+          dotnet build Core/MelonLoader.Installer.Core.csproj -c Release
+          dotnet build Cli/MelonLoader.Installer.Cli.csproj -c Release
+          dotnet build Tests/MelonLoader.Installer.Tests.csproj -c Release
+
+      - name: Run unit and integration tests (including source-built melon_data_repaired.zip)
+        env:
+          REPAIRED_MELON_DATA: ${{ github.workspace }}/melon_data_repaired.zip
+        run: |
+          dotnet test Tests/MelonLoader.Installer.Tests.csproj -c Release --no-build --verbosity normal
+
+  build-and-test-windows:
+    runs-on: windows-latest
+    needs: [ build-repaired-lemonloader ]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Install MAUI Windows workload
+        shell: pwsh
+        run: |
+          dotnet workload install maui-windows
+
+      - name: Download repaired LemonLoader bundle into Resources/repaired
+        uses: actions/download-artifact@v4
+        with:
+          name: melon_data_repaired
+          path: Resources/repaired
+
+      - name: Run unit and integration tests on Windows
+        shell: pwsh
+        env:
+          REPAIRED_MELON_DATA: ${{ github.workspace }}\Resources\repaired\melon_data_repaired.zip
+        run: |
+          dotnet test Tests/MelonLoader.Installer.Tests.csproj -c Release --verbosity normal
+
+      - name: Publish Windows standalone Repair CLI (win-x64)
+        shell: pwsh
+        run: |
+          dotnet publish Cli/MelonLoader.Installer.Cli.csproj -c Release -r win-x64 --self-contained true -o publish_win_cli
+
+      - name: Publish Windows 10/11 standalone GUI executable (win-x64)
+        shell: pwsh
+        run: |
+          dotnet publish App/MelonLoader.Installer.App.csproj -f net8.0-windows10.0.19041.0 -c Release -r win-x64 --self-contained true -p:WindowsAppSDKSelfContained=true -o publish_win_app
+
+      - name: Verify Windows standalone package & run CLI verification
+        shell: pwsh
+        run: |
+          Copy-Item -Path "publish_win_cli\LemonLoaderRepairCli.exe" -Destination "publish_win_app\" -Force
+          if (-not (Test-Path "publish_win_app\MelonLoader.Installer.App.exe")) { throw "Missing MelonLoader.Installer.App.exe" }
+          if (-not (Test-Path "publish_win_app\LemonLoaderRepairCli.exe")) { throw "Missing LemonLoaderRepairCli.exe" }
+          if (-not (Test-Path "publish_win_app\Resources\platform-tools\adb.exe")) { throw "Missing Resources/platform-tools/adb.exe" }
+          if (-not (Test-Path "publish_win_app\Resources\repaired\melon_data_repaired.zip")) { throw "Missing Resources/repaired/melon_data_repaired.zip" }
+          & "publish_win_app\LemonLoaderRepairCli.exe" diagnose "publish_win_app\Resources\repaired\melon_data_repaired.zip"
+          if ($LASTEXITCODE -ne 0) { throw "CLI diagnose failed on Windows!" }
+
+      - name: Upload Windows 10/11 Standalone Executable Package
+        uses: actions/upload-artifact@v4
+        with:
+          name: LemonLoader-Windows-Standalone-x64
+          path: publish_win_app/

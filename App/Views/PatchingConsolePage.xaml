@@ -2,8 +2,8 @@
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              x:Class="MelonLoader.Installer.App.Views.PatchingConsolePage">
-    
-    <Grid RowDefinitions="Auto, *, Auto">
+
+    <Grid RowDefinitions="Auto, *, Auto, Auto">
         <Label x:Name="TitleLabel"
                Grid.Row="0"
                Text="Patching..."
@@ -19,17 +19,55 @@
                 Margin="20,0,20,10">
             <ScrollView x:Name="LogScrollView">
                 <Label x:Name="LogLabel"
+                       FontFamily="Consolas"
+                       TextColor="{StaticResource ExtraLight}"
                        LineBreakMode="WordWrap" />
             </ScrollView>
         </Border>
-        <Border  x:Name="GoBackButton"
-                 Grid.Row="2"
-                 Stroke="{StaticResource Light}"
-                 Background="{StaticResource Light}"
-                 StrokeShape="RoundRectangle 15,15,15,15"
-                 Padding="10"
-                 Margin="20,0,20,10">
 
+        <Grid Grid.Row="2" ColumnDefinitions="*,*,*" ColumnSpacing="10" Margin="20,0,20,10">
+            <Border x:Name="CopyLogButton"
+                    Grid.Column="0"
+                    Stroke="{StaticResource Primary}"
+                    Background="{StaticResource Primary}"
+                    StrokeShape="RoundRectangle 15,15,15,15"
+                    Padding="10">
+                <Label Text="Copy Log"
+                       TextColor="{StaticResource Light}"
+                       FontSize="Small"
+                       HorizontalTextAlignment="Center" />
+            </Border>
+            <Border x:Name="SaveLogButton"
+                    Grid.Column="1"
+                    Stroke="{StaticResource Primary}"
+                    Background="{StaticResource Primary}"
+                    StrokeShape="RoundRectangle 15,15,15,15"
+                    Padding="10">
+                <Label Text="Save Log As..."
+                       TextColor="{StaticResource Light}"
+                       FontSize="Small"
+                       HorizontalTextAlignment="Center" />
+            </Border>
+            <Border x:Name="OpenLogsFolderButton"
+                    Grid.Column="2"
+                    Stroke="{StaticResource Primary}"
+                    Background="{StaticResource Primary}"
+                    StrokeShape="RoundRectangle 15,15,15,15"
+                    Padding="10">
+                <Label Text="Open Logs Folder"
+                       TextColor="{StaticResource Light}"
+                       FontSize="Small"
+                       HorizontalTextAlignment="Center" />
+            </Border>
+        </Grid>
+
+        <Border x:Name="GoBackButton"
+                Grid.Row="3"
+                Stroke="{StaticResource Light}"
+                Background="{StaticResource Light}"
+                StrokeShape="RoundRectangle 15,15,15,15"
+                Padding="10"
+                Margin="20,0,20,10">
             <Label Text="Go Back"
                    TextColor="{StaticResource Primary}"
                    FontSize="Small"

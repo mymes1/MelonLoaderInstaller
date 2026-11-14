@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
 		<TargetFrameworks>net8.0-android</TargetFrameworks>
@@ -130,7 +130,15 @@
 	  </MauiXaml>
 	</ItemGroup>
 
+	<ItemGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) != 'android'">
+	  <None Include="..\Resources\WindowsResources\**" Link="Resources\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+	  <None Include="..\Resources\repaired\melon_data_repaired.zip" Condition="Exists('..\Resources\repaired\melon_data_repaired.zip')" Link="Resources\repaired\melon_data_repaired.zip" CopyToOutputDirectory="PreserveNewest" />
+	</ItemGroup>
+
 	<Target Name="PostBuild" AfterTargets="PostBuildEvent" Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) != 'android'">
-	  <Exec Command="XCOPY &quot;$(SolutionDir)Resources\WindowsResources&quot; &quot;$(TargetDir)\Resources\&quot; /S /Y" />
+	  <ItemGroup>
+	    <_WinRes Include="$(MSBuildThisFileDirectory)..\Resources\WindowsResources\**\*" />
+	  </ItemGroup>
+	  <Copy SourceFiles="@(_WinRes)" DestinationFiles="@(_WinRes->'$(TargetDir)Resources\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
 	</Target>
 </Project>
