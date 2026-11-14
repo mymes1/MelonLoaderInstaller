@@ -346,8 +346,8 @@ public sealed class InstallerTests : IDisposable
         Assert.True(diag.IsHealthy, diag.FormatReport());
         Assert.False(diag.HasNullMethodForMelonLoaderBug);
         Assert.False(diag.HasRegisterTypeOptionsMismatch);
-        Assert.Contains(diag.Checks, c => c.Id == "BOOTSTRAP_EARLY_LOGGING" && c.Severity == DiagnosticSeverity.Pass);
-        Assert.Contains(diag.Checks, c => c.Id == "MAIN_EARLY_LOGGING" && c.Severity == DiagnosticSeverity.Pass);
+        Assert.Contains(diag.Checks, c => c.Id == "BOOTSTRAP_EARLY_LOGGING" && c.Severity == Core.Diagnostics.DiagnosticSeverity.Pass);
+        Assert.Contains(diag.Checks, c => c.Id == "MAIN_EARLY_LOGGING" && c.Severity == Core.Diagnostics.DiagnosticSeverity.Pass);
 
         string inputApk = CreateSyntheticUnityApk(
             Path.Combine(_workDir, "dream_team_unpatched.apk"),
