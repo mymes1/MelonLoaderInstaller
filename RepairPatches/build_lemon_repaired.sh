@@ -19,6 +19,17 @@ else
   git -C "$ML_DIR" submodule update --init --recursive
 fi
 
+# MelonLoader's .gitmodules lists External/* forks, though only MonoMod has an active gitlink in 0.6.X;
+# populate the remaining official fork submodules directly if missing.
+[ -f "$ML_DIR/External/Il2CppInterop/Il2CppInterop.Runtime/Il2CppInterop.Runtime.csproj" ] || \
+  git clone --depth 1 https://github.com/LemonLoader/Il2CppInterop.git "$ML_DIR/External/Il2CppInterop"
+[ -f "$ML_DIR/External/HarmonyX/Harmony/Harmony.csproj" ] || \
+  git clone --depth 1 https://github.com/LemonLoader/HarmonyX.git "$ML_DIR/External/HarmonyX"
+[ -f "$ML_DIR/External/JNISharp/JNISharp/JNISharp.csproj" ] || \
+  git clone --depth 1 https://github.com/LemonLoader/JNISharp.git "$ML_DIR/External/JNISharp"
+[ -f "$ML_DIR/External/Cpp2IL/Cpp2IL.Core/Cpp2IL.Core.csproj" ] || \
+  git clone --depth 1 --branch 2022.1.0-pre-release.16 https://github.com/SamboyCoding/Cpp2IL.git "$ML_DIR/External/Cpp2IL"
+
 echo "[2/7] Applying verified LemonLoader source repairs..."
 python3 "$SCRIPT_DIR/apply_lemonloader_repairs.py" "$ML_DIR"
 
