@@ -378,6 +378,20 @@ def patch_process_fix(root: Path) -> None:
         print(f"[patched] {target}")
 
 
+def patch_il2cpp_interop_fixes(root: Path) -> None:
+    target = root / "MelonLoader/Fixes/Il2CppInteropFixes.cs"
+    if not target.exists():
+        return
+
+    text = target.read_text(encoding="utf-8")
+    if "__0.Module" not in text:
+        return
+
+    updated = text.replace("__0.Module", "__0.DeclaringModule")
+    write_utf8(target, updated)
+    print(f"[patched] {target} (AsmResolver 6.0.0-beta.5 DeclaringModule)")
+
+
 def patch_csproj_asmresolver(root: Path) -> None:
     ml_csproj = root / "MelonLoader/MelonLoader.csproj"
     if not ml_csproj.exists():
@@ -428,6 +442,7 @@ def main() -> int:
     patch_shield(root)
     patch_detour_context_dispose_fix(root)
     patch_process_fix(root)
+    patch_il2cpp_interop_fixes(root)
     patch_csproj_asmresolver(root)
     verify_il2cpp_interop_abi(root)
     print("[success] All LemonLoader fork source repairs applied cleanly.")
