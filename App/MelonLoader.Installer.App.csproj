@@ -134,8 +134,8 @@
 	</ItemGroup>
 
 	<ItemGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) != 'android'">
-	  <None Include="..\Resources\WindowsResources\**" Link="Resources\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
-	  <None Include="..\Resources\repaired\melon_data_repaired.zip" Condition="Exists('..\Resources\repaired\melon_data_repaired.zip')" Link="Resources\repaired\melon_data_repaired.zip" CopyToOutputDirectory="PreserveNewest" />
+	  <None Include="..\Resources\WindowsResources\**" Link="Resources\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+	  <None Include="..\Resources\repaired\melon_data_repaired.zip" Condition="Exists('..\Resources\repaired\melon_data_repaired.zip')" Link="Resources\repaired\melon_data_repaired.zip" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
 	</ItemGroup>
 
 	<Target Name="PostBuild" AfterTargets="PostBuildEvent" Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) != 'android'">
@@ -143,5 +143,13 @@
 	    <_WinRes Include="$(MSBuildThisFileDirectory)..\Resources\WindowsResources\**\*" />
 	  </ItemGroup>
 	  <Copy SourceFiles="@(_WinRes)" DestinationFiles="@(_WinRes->'$(TargetDir)Resources\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+	</Target>
+
+	<Target Name="CopyWindowsResourcesToPublish" AfterTargets="Publish" Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) != 'android'">
+	  <ItemGroup>
+	    <_WinResPub Include="$(MSBuildThisFileDirectory)..\Resources\WindowsResources\**\*" />
+	  </ItemGroup>
+	  <Copy SourceFiles="@(_WinResPub)" DestinationFiles="@(_WinResPub->'$(PublishDir)Resources\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+	  <Copy SourceFiles="$(MSBuildThisFileDirectory)..\Resources\repaired\melon_data_repaired.zip" DestinationFiles="$(PublishDir)Resources\repaired\melon_data_repaired.zip" Condition="Exists('$(MSBuildThisFileDirectory)..\Resources\repaired\melon_data_repaired.zip')" SkipUnchangedFiles="true" />
 	</Target>
 </Project>

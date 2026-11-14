@@ -160,13 +160,19 @@ jobs:
       - name: Verify Windows standalone package & run CLI verification
         shell: pwsh
         run: |
-          Copy-Item -Path "publish_win_cli\LemonLoaderRepairCli.exe" -Destination "publish_win_app\" -Force
-          if (-not (Test-Path "publish_win_app\MelonLoader.Installer.App.exe")) { throw "Missing MelonLoader.Installer.App.exe" }
-          if (-not (Test-Path "publish_win_app\LemonLoaderRepairCli.exe")) { throw "Missing LemonLoaderRepairCli.exe" }
-          if (-not (Test-Path "publish_win_app\Resources\platform-tools\adb.exe")) { throw "Missing Resources/platform-tools/adb.exe" }
-          if (-not (Test-Path "publish_win_app\Resources\repaired\melon_data_repaired.zip")) { throw "Missing Resources/repaired/melon_data_repaired.zip" }
-          & "publish_win_app\LemonLoaderRepairCli.exe" diagnose "publish_win_app\Resources\repaired\melon_data_repaired.zip"
-          if ($LASTEXITCODE -ne 0) { throw "CLI diagnose failed on Windows!" }
+          try {
+            Copy-Item -Path "publish_win_cli\LemonLoaderRepairCli.exe" -Destination "publish_win_app\" -Force
+            if (-not (Test-Path "publish_win_app\MelonLoader.Installer.App.exe")) { throw "Missing MelonLoader.Installer.App.exe" }
+            if (-not (Test-Path "publish_win_app\LemonLoaderRepairCli.exe")) { throw "Missing LemonLoaderRepairCli.exe" }
+            if (-not (Test-Path "publish_win_app\Resources\platform-tools\adb.exe")) { throw "Missing Resources/platform-tools/adb.exe" }
+            if (-not (Test-Path "publish_win_app\Resources\repaired\melon_data_repaired.zip")) { throw "Missing Resources/repaired/melon_data_repaired.zip" }
+            & "publish_win_app\LemonLoaderRepairCli.exe" diagnose "publish_win_app\Resources\repaired\melon_data_repaired.zip"
+            if ($LASTEXITCODE -ne 0) { throw "CLI diagnose failed on Windows!" }
+          } catch {
+            Write-Host "::error::$($_.Exception.Message)"
+            Get-ChildItem -Path "publish_win_app" -Depth 2 | Out-String | Write-Host
+            exit 1
+          }
 
       - name: Upload Windows 10/11 Standalone Executable Package
         uses: actions/upload-artifact@v4
