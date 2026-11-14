@@ -1,4 +1,5 @@
-﻿using System.IO;
+using System;
+using System.IO;
 
 namespace MelonLoader.Installer.Core.PatchSteps;
 
@@ -10,8 +11,10 @@ internal class CleanUp : IPatchStep
 
         try
         {
-            DeleteFile(patcher.Args.MelonDataPath);
-            DeleteFile(patcher.Args.UnityDependenciesPath);
+            if (IsInsideDirectory(patcher.Args.MelonDataPath, patcher.Args.TempDirectory))
+                DeleteFile(patcher.Args.MelonDataPath);
+            if (IsInsideDirectory(patcher.Args.UnityDependenciesPath, patcher.Args.TempDirectory))
+                DeleteFile(patcher.Args.UnityDependenciesPath);
 
             DeleteDir(patcher.Info.LemonDataDirectory);
             DeleteDir(patcher.Info.UnityNativeDirectory);
@@ -25,6 +28,17 @@ internal class CleanUp : IPatchStep
         }
 
         return true;
+    }
+
+    private static bool IsInsideDirectory(string? filePath, string? dirPath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath) || string.IsNullOrWhiteSpace(dirPath))
+            return false;
+
+        string fullFile = Path.GetFullPath(filePath);
+        string fullDir = Path.GetFullPath(dirPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            + Path.DirectorySeparatorChar;
+        return fullFile.StartsWith(fullDir, StringComparison.OrdinalIgnoreCase);
     }
 
     private static void DeleteFile(string path)
