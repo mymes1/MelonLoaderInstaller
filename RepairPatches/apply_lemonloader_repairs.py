@@ -408,7 +408,9 @@ extern "C" {
 }
 
 static EARLY_LOG_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
+static EARLY_EXT_LOG_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
 static EARLY_STAGE: Mutex<String> = Mutex::new(String::new());
+static PANIC_HOOK_INSTALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub fn read_cmdline_package() -> Option<String> {
     let data = std::fs::read("/proc/self/cmdline").ok()?;
@@ -433,6 +435,21 @@ pub fn init_early_log(pkg_override: Option<&str>) {
         if let Ok(mut guard) = EARLY_LOG_PATH.lock() {
             *guard = Some(path);
         }
+
+        let ext_dir = PathBuf::from("/sdcard/Android/data").join(&pkg_name).join("files");
+        let _ = create_dir_all(&ext_dir);
+        let ext_path = ext_dir.join("lemon_early_crash.log");
+        if let Ok(mut guard) = EARLY_EXT_LOG_PATH.lock() {
+            *guard = Some(ext_path);
+        }
+    }
+
+    if !PANIC_HOOK_INSTALLED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            checkpoint("PANIC", &format!("{info}"));
+            prev(info);
+        }));
     }
 }
 
@@ -469,6 +486,14 @@ pub fn checkpoint(stage: &str, msg: &str) {
     }
 
     if let Ok(guard) = EARLY_LOG_PATH.lock() {
+        if let Some(ref path) = *guard {
+            if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
+                let _ = writeln!(f, "{line}");
+                let _ = f.sync_all();
+            }
+        }
+    }
+    if let Ok(guard) = EARLY_EXT_LOG_PATH.lock() {
         if let Some(ref path) = *guard {
             if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
                 let _ = writeln!(f, "{line}");
@@ -871,8 +896,10 @@ use android_liblog_sys::__android_log_write;
 
 static INTERNAL_LOG_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
 static INTERNAL_LOG_PATH_CSTR: Mutex<Option<CString>> = Mutex::new(None);
+static EXTERNAL_LOG_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
 static BOOTSTRAP_STAGE: Mutex<String> = Mutex::new(String::new());
 static SIGNAL_HANDLER_INSTALLED: AtomicBool = AtomicBool::new(false);
+static PANIC_HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);
 
 pub fn read_cmdline_package() -> Option<String> {
     let data = std::fs::read("/proc/self/cmdline").ok()?;
@@ -903,10 +930,25 @@ pub fn init(pkg_override: Option<&str>) {
             *guard = Some(path);
         }
 
+        let ext_dir = PathBuf::from("/sdcard/Android/data").join(&pkg_name).join("files");
+        let _ = create_dir_all(&ext_dir);
+        let ext_path = ext_dir.join("lemon_early_crash.log");
+        if let Ok(mut guard) = EXTERNAL_LOG_PATH.lock() {
+            *guard = Some(ext_path);
+        }
+
         let stage_file = dir.join("lemon_stage.txt");
         if let Ok(txt) = std::fs::read_to_string(&stage_file) {
             set_stage(&txt);
         }
+    }
+
+    if !PANIC_HOOK_INSTALLED.swap(true, Ordering::SeqCst) {
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            checkpoint("PANIC", &format!("{info}"));
+            prev(info);
+        }));
     }
 
     install_crash_signal_handlers();
@@ -948,6 +990,14 @@ pub fn checkpoint(stage: &str, msg: &str) {
     }
 
     if let Ok(guard) = INTERNAL_LOG_PATH.lock() {
+        if let Some(ref path) = *guard {
+            if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
+                let _ = writeln!(f, "{line}");
+                let _ = f.sync_all();
+            }
+        }
+    }
+    if let Ok(guard) = EXTERNAL_LOG_PATH.lock() {
         if let Some(ref path) = *guard {
             if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
                 let _ = writeln!(f, "{line}");
@@ -1711,7 +1761,70 @@ fn detour_inner(
             "    early_log::checkpoint(\"dotnet_init\", \"BEFORE Managed Initialize()\");\n    (imports.initialize)();\n    early_log::checkpoint(\"dotnet_init\", \"AFTER Managed Initialize()\");",
             1,
         )
+        dtext = dtext.replace(
+            "    let threads = get_all_attached_threads(addr_of_mut!(size));\n"
+            "    let threads_slice = unsafe { std::slice::from_raw_parts(threads, size) };\n\n"
+            "    for i in 0..size {\n"
+            "        let thread_id = unsafe { *(*threads_slice[i]).internal_thread }.tid;",
+            "    let threads = get_all_attached_threads(addr_of_mut!(size));\n"
+            "    if threads.is_null() || size == 0 {\n"
+            "        return true;\n"
+            "    }\n"
+            "    let threads_slice = unsafe { std::slice::from_raw_parts(threads, size) };\n\n"
+            "    for i in 0..size {\n"
+            "        let thread_ptr = threads_slice[i];\n"
+            "        if thread_ptr.is_null() {\n"
+            "            continue;\n"
+            "        }\n"
+            "        let internal_ptr = unsafe { (*thread_ptr).internal_thread };\n"
+            "        if internal_ptr.is_null() {\n"
+            "            continue;\n"
+            "        }\n"
+            "        let thread_id = unsafe { (*internal_ptr).tid };",
+            1,
+        )
         write_utf8(dotnet_rs, dtext)
+
+    assert_rs = boot_dir / "logging/assert.rs"
+    atext = assert_rs.read_text(encoding="utf-8")
+    if "early_log::checkpoint" not in atext:
+        atext = atext.replace(
+            "let _ = $crate::logging::logger::log_console_file($crate::logging::logger::LogLevel::Error, prefix.as_str());",
+            "$crate::early_log::checkpoint(\"INTERNAL_FAILURE\", prefix.as_str());\n        let _ = $crate::logging::logger::log_console_file($crate::logging::logger::LogLevel::Error, prefix.as_str());",
+            1,
+        )
+        write_utf8(assert_rs, atext)
+
+    bootstrap_interop_rs = """use std::ffi::c_void;
+
+use crate::{early_log, error, hooks::{self, NativeHook}};
+
+pub unsafe extern "C" fn attach(target: *mut *mut c_void, detour: *mut c_void) {
+    if target.is_null() || (*target).is_null() || detour.is_null() {
+        early_log::checkpoint("bootstrap_interop", "WARN attach called with null target or detour");
+        return;
+    }
+
+    let mut hook = NativeHook::<fn()>::new(*target, detour);
+    match hook.hook() {
+        Ok(_) => *target = hook.trampoline as *mut c_void,
+        Err(e) => {
+            early_log::checkpoint("bootstrap_interop", &format!("ERROR attach failed: {e}"));
+            let _ = error!("Failed to hook function: {}", e.to_string());
+        }
+    };
+}
+
+pub unsafe extern "C" fn detach(target: *mut *mut c_void, _detour: *mut c_void) {
+    if target.is_null() || (*target).is_null() {
+        return;
+    }
+    hooks::functions::unhook(*target as usize).unwrap_or_else(|e| {
+        let _ = error!("Failed to unhook function: {}", e.to_string());
+    });
+}
+"""
+    write_utf8(boot_dir / "icalls/bootstrap_interop.rs", bootstrap_interop_rs)
 
     print(f"[patched] {boot_dir} (early crash log, signal handler, ABI & hook checkpoints, stage support)")
 

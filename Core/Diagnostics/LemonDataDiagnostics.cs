@@ -178,15 +178,20 @@ public static class LemonDataDiagnostics
             SourceKind = sourceKind
         };
 
-        // 1. MelonLoader.dll inspection (Null method for MelonLoader / DotnetAssemblyLoadContextFix)
-        byte[]? mlDll = readBytes(mlPrefix + "net8/MelonLoader.dll");
+        // 1. Detect bundle layout: v0.7.3 NativeAOT (MelonLoader/net6/, single libmain.so) vs legacy 0.6.X (MelonLoader/net8/, libBootstrap.so)
+        byte[]? mlNet6Dll = readBytes(mlPrefix + "net6/MelonLoader.dll");
+        byte[]? mlNet8Dll = readBytes(mlPrefix + "net8/MelonLoader.dll");
+        bool isNativeAot073 = mlNet6Dll != null && mlNet8Dll == null;
+        string runtimeSubdir = isNativeAot073 ? "net6" : "net8";
+        byte[]? mlDll = isNativeAot073 ? mlNet6Dll : mlNet8Dll;
+
         if (mlDll == null)
         {
             report.Checks.Add(new DiagnosticCheck(
                 "MELONLOADER_DLL_MISSING",
                 "MelonLoader.dll",
                 DiagnosticSeverity.Critical,
-                $"Missing {mlPrefix}net8/MelonLoader.dll"));
+                $"Missing {mlPrefix}{runtimeSubdir}/MelonLoader.dll"));
         }
         else
         {
@@ -202,11 +207,12 @@ public static class LemonDataDiagnostics
             }
             else
             {
+                string layoutLabel = isNativeAot073 ? "v0.7.3 NativeAOT / net6 layout" : (mlInfo.TargetFramework ?? "net8");
                 report.Checks.Add(new DiagnosticCheck(
                     "MELONLOADER_DLL_PRESENT",
                     "MelonLoader.dll",
                     DiagnosticSeverity.Pass,
-                    $"Found MelonLoader.dll v{mlInfo.AssemblyVersion} ({mlInfo.TargetFramework ?? "net8"})"));
+                    $"Found MelonLoader.dll v{mlInfo.AssemblyVersion} ({layoutLabel})"));
 
                 // MelonAssembly.cs legitimately calls public AssemblyLoadContext.Default.LoadFromStream(Stream, Stream),
                 // which emits an ASCII MemberRef "LoadFromStream". The broken .NET 6 QCall hook in
@@ -237,19 +243,21 @@ public static class LemonDataDiagnostics
                         "Obsolete .NET 6 LoadFromPath/LoadFromStream hooks are absent (safe on .NET 8)."));
                 }
 
-                bool hasIl2CppInteropFixes = mlInfo.TypeNames.Contains("MelonLoader.Fixes.Il2CppInteropFixes");
+                bool hasIl2CppInteropFixes =
+                    mlInfo.TypeNames.Contains("MelonLoader.Fixes.Il2CppInteropFixes") ||
+                    mlInfo.TypeNames.Contains("MelonLoader.Fixes.Il2CppInterop.Il2CppICallInjector");
                 report.Checks.Add(new DiagnosticCheck(
                     "IL2CPP_INTEROP_FIXES",
                     "Il2CppInteropFixes",
                     hasIl2CppInteropFixes ? DiagnosticSeverity.Pass : DiagnosticSeverity.Warning,
                     hasIl2CppInteropFixes
-                        ? "Il2CppInteropFixes present in MelonLoader.dll."
-                        : "Il2CppInteropFixes missing in MelonLoader.dll."));
+                        ? "Il2CppInterop fixes present in MelonLoader.dll."
+                        : "Il2CppInterop fixes missing in MelonLoader.dll."));
             }
         }
 
         // 2. Il2CppInterop.Runtime.dll + SupportModules/Il2Cpp.dll inspection (RegisterTypeOptions.set_LogSuccess)
-        byte[]? interopRuntime = readBytes(mlPrefix + "net8/Il2CppInterop.Runtime.dll")
+        byte[]? interopRuntime = readBytes($"{mlPrefix}{runtimeSubdir}/Il2CppInterop.Runtime.dll")
             ?? readBytes(mlPrefix + "Dependencies/SupportModules/Il2CppInterop.Runtime.dll");
         byte[]? il2cppSupportDll = readBytes(mlPrefix + "Dependencies/SupportModules/Il2Cpp.dll");
 
@@ -352,8 +360,8 @@ public static class LemonDataDiagnostics
             }
         }
 
-        // 3. HarmonyX, Il2CppInterop.HarmonySupport, JNISharp, MonoMod, Il2CppAssemblyGenerator, NativeHost
-        CheckManagedAssembly(report, readBytes, mlPrefix + "net8/0Harmony.dll", "0Harmony.dll", (info) =>
+        // 3. HarmonyX, Il2CppInterop.*, MonoMod, Il2CppAssemblyGenerator, NativeHost (plus JNISharp/MonoMod.Core on 0.6.X or Cpp2IL.Core on v0.7.3)
+        CheckManagedAssembly(report, readBytes, $"{mlPrefix}{runtimeSubdir}/0Harmony.dll", "0Harmony.dll", (info) =>
         {
             bool hasReversePatch = info.TypeNames.Contains("HarmonyLib.PatchFunctions");
             if (!hasReversePatch)
@@ -361,38 +369,46 @@ public static class LemonDataDiagnostics
             return (DiagnosticSeverity.Pass, $"0Harmony.dll v{info.AssemblyVersion} OK.");
         });
 
-        CheckManagedAssembly(report, readBytes, mlPrefix + "net8/Il2CppInterop.HarmonySupport.dll", "Il2CppInterop.HarmonySupport.dll",
+        CheckManagedAssembly(report, readBytes, $"{mlPrefix}{runtimeSubdir}/Il2CppInterop.HarmonySupport.dll", "Il2CppInterop.HarmonySupport.dll",
             info => (DiagnosticSeverity.Pass, $"Il2CppInterop.HarmonySupport.dll v{info.AssemblyVersion} OK."));
 
-        CheckManagedAssembly(report, readBytes, mlPrefix + "net8/Il2CppInterop.Common.dll", "Il2CppInterop.Common.dll",
+        CheckManagedAssembly(report, readBytes, $"{mlPrefix}{runtimeSubdir}/Il2CppInterop.Common.dll", "Il2CppInterop.Common.dll",
             info => (DiagnosticSeverity.Pass, $"Il2CppInterop.Common.dll v{info.AssemblyVersion} OK."));
 
-        CheckManagedAssembly(report, readBytes, mlPrefix + "net8/Il2CppInterop.Generator.dll", "Il2CppInterop.Generator.dll",
+        CheckManagedAssembly(report, readBytes, $"{mlPrefix}{runtimeSubdir}/Il2CppInterop.Generator.dll", "Il2CppInterop.Generator.dll",
             info => (DiagnosticSeverity.Pass, $"Il2CppInterop.Generator.dll v{info.AssemblyVersion} OK."));
 
-        CheckManagedAssembly(report, readBytes, mlPrefix + "net8/JNISharp.dll", "JNISharp.dll",
-            info => (DiagnosticSeverity.Pass, $"JNISharp.dll v{info.AssemblyVersion} OK."));
+        if (!isNativeAot073)
+        {
+            CheckManagedAssembly(report, readBytes, $"{mlPrefix}{runtimeSubdir}/JNISharp.dll", "JNISharp.dll",
+                info => (DiagnosticSeverity.Pass, $"JNISharp.dll v{info.AssemblyVersion} OK."));
 
-        CheckManagedAssembly(report, readBytes, mlPrefix + "net8/MonoMod.Core.dll", "MonoMod.Core.dll",
-            info => (DiagnosticSeverity.Pass, $"MonoMod.Core.dll v{info.AssemblyVersion} OK."));
+            CheckManagedAssembly(report, readBytes, $"{mlPrefix}{runtimeSubdir}/MonoMod.Core.dll", "MonoMod.Core.dll",
+                info => (DiagnosticSeverity.Pass, $"MonoMod.Core.dll v{info.AssemblyVersion} OK."));
+        }
+        else
+        {
+            CheckManagedAssembly(report, readBytes, mlPrefix + "Dependencies/Il2CppAssemblyGenerator/Cpp2IL.Core.dll", "Cpp2IL.Core.dll",
+                info => (DiagnosticSeverity.Pass, $"In-process Cpp2IL.Core.dll v{info.AssemblyVersion} OK."));
+        }
 
-        CheckManagedAssembly(report, readBytes, mlPrefix + "net8/MonoMod.RuntimeDetour.dll", "MonoMod.RuntimeDetour.dll",
+        CheckManagedAssembly(report, readBytes, $"{mlPrefix}{runtimeSubdir}/MonoMod.RuntimeDetour.dll", "MonoMod.RuntimeDetour.dll",
             info => (DiagnosticSeverity.Pass, $"MonoMod.RuntimeDetour.dll v{info.AssemblyVersion} OK."));
 
-        CheckManagedAssembly(report, readBytes, mlPrefix + "net8/MelonLoader.NativeHost.dll", "MelonLoader.NativeHost.dll",
+        CheckManagedAssembly(report, readBytes, $"{mlPrefix}{runtimeSubdir}/MelonLoader.NativeHost.dll", "MelonLoader.NativeHost.dll",
             info => (DiagnosticSeverity.Pass, $"MelonLoader.NativeHost.dll v{info.AssemblyVersion} OK."));
 
         CheckManagedAssembly(report, readBytes, mlPrefix + "Dependencies/Il2CppAssemblyGenerator/Il2CppAssemblyGenerator.dll", "Il2CppAssemblyGenerator.dll",
             info => (DiagnosticSeverity.Pass, $"Il2CppAssemblyGenerator.dll v{info.AssemblyVersion} OK."));
 
-        byte[]? runtimeConfig = readBytes(mlPrefix + "net8/MelonLoader.runtimeconfig.json");
+        byte[]? runtimeConfig = readBytes($"{mlPrefix}{runtimeSubdir}/MelonLoader.runtimeconfig.json");
         report.Checks.Add(new DiagnosticCheck(
             "RUNTIME_CONFIG",
             "MelonLoader.runtimeconfig.json",
             runtimeConfig != null ? DiagnosticSeverity.Pass : DiagnosticSeverity.Critical,
             runtimeConfig != null
                 ? "MelonLoader.runtimeconfig.json present."
-                : $"Missing {mlPrefix}net8/MelonLoader.runtimeconfig.json."));
+                : $"Missing {mlPrefix}{runtimeSubdir}/MelonLoader.runtimeconfig.json."));
 
         // 4. .NET 8 Android Runtime checks
         CheckArm64Elf(report, readBytes, dotnetPrefix + "host/fxr/8.0.6/libhostfxr.so", "dotnet/libhostfxr.so", required: true);
@@ -408,29 +424,6 @@ public static class LemonDataDiagnostics
                 : "Missing .NET 8.0.6 System.Runtime.dll in dotnet runtime."));
 
         // 5. Native Android ARM64 binaries
-        byte[]? bootstrapBytes = readBytes(nativePrefix + "libBootstrap.so");
-        var bootstrapElf = CheckArm64Elf(report, readBytes, nativePrefix + "libBootstrap.so", "libBootstrap.so", required: true);
-        if (bootstrapElf != null && bootstrapElf.IsArm64 && bootstrapBytes != null)
-        {
-            bool hasSslCertFix = ElfHeaderInspector.ContainsAscii(bootstrapBytes, "SSL_CERT_DIR");
-            report.Checks.Add(new DiagnosticCheck(
-                "BOOTSTRAP_SSL_FIX",
-                "libBootstrap.so",
-                hasSslCertFix ? DiagnosticSeverity.Pass : DiagnosticSeverity.Warning,
-                hasSslCertFix
-                    ? "libBootstrap.so includes Android SSL_CERT_DIR fix (needed for HTTPS Il2CppAssemblyGenerator/mods)."
-                    : "libBootstrap.so is missing Android SSL_CERT_DIR environment fix (pre-1ddfecd build)."));
-
-            bool hasEarlyCrashLog = ElfHeaderInspector.ContainsAscii(bootstrapBytes, "lemon_early_crash.log");
-            report.Checks.Add(new DiagnosticCheck(
-                "BOOTSTRAP_EARLY_LOGGING",
-                "libBootstrap.so",
-                hasEarlyCrashLog ? DiagnosticSeverity.Pass : DiagnosticSeverity.Warning,
-                hasEarlyCrashLog
-                    ? "libBootstrap.so includes early crash-surviving logging, signal handler, and stage isolation."
-                    : "libBootstrap.so lacks early crash-surviving logging (lemon_early_crash.log)."));
-        }
-
         byte[]? mainBytes = readBytes(nativePrefix + "libmain.so");
         var mainElf = CheckArm64Elf(report, readBytes, nativePrefix + "libmain.so", "libmain.so", required: true);
         if (mainElf != null && mainElf.IsArm64 && mainBytes != null)
@@ -444,7 +437,68 @@ public static class LemonDataDiagnostics
                     ? "libmain.so includes early checkpoint logging, libDir-aware dlopen, and safe load ordering."
                     : "libmain.so lacks early checkpoint logging and stage isolation."));
         }
-        CheckArm64Elf(report, readBytes, nativePrefix + "libdobby.so", "libdobby.so", required: true);
+
+        byte[]? bootstrapBytes = readBytes(nativePrefix + "libBootstrap.so");
+        if (isNativeAot073 && bootstrapBytes == null)
+        {
+            // v0.7.3 NativeAOT embeds bootstrap, dobby, and plthook directly inside libmain.so
+            if (mainElf != null && mainElf.IsArm64 && mainBytes != null)
+            {
+                bool hasSslCertFix = ElfHeaderInspector.ContainsAscii(mainBytes, "SSL_CERT_DIR");
+                report.Checks.Add(new DiagnosticCheck(
+                    "BOOTSTRAP_SSL_FIX",
+                    "libmain.so (NativeAOT)",
+                    hasSslCertFix ? DiagnosticSeverity.Pass : DiagnosticSeverity.Warning,
+                    hasSslCertFix
+                        ? "NativeAOT libmain.so includes Android SSL_CERT_DIR fix."
+                        : "NativeAOT libmain.so is missing Android SSL_CERT_DIR fix."));
+
+                bool hasEarlyCrashLog = ElfHeaderInspector.ContainsAscii(mainBytes, "lemon_early_crash.log");
+                report.Checks.Add(new DiagnosticCheck(
+                    "BOOTSTRAP_EARLY_LOGGING",
+                    "libmain.so (NativeAOT)",
+                    hasEarlyCrashLog ? DiagnosticSeverity.Pass : DiagnosticSeverity.Warning,
+                    hasEarlyCrashLog
+                        ? "NativeAOT libmain.so includes SA_SIGINFO crash-surviving logging and stage isolation."
+                        : "NativeAOT libmain.so lacks early crash-surviving logging (lemon_early_crash.log)."));
+
+                bool hasJniOnLoad = mainElf.ExportedSymbols.Contains("JNI_OnLoad", StringComparer.Ordinal);
+                report.Checks.Add(new DiagnosticCheck(
+                    "MAIN_JNI_ONLOAD",
+                    "libmain.so (NativeAOT)",
+                    hasJniOnLoad ? DiagnosticSeverity.Pass : DiagnosticSeverity.Critical,
+                    hasJniOnLoad
+                        ? "NativeAOT libmain.so exports JNI_OnLoad."
+                        : "NativeAOT libmain.so is missing exported JNI_OnLoad symbol."));
+            }
+        }
+        else
+        {
+            var bootstrapElf = CheckArm64Elf(report, readBytes, nativePrefix + "libBootstrap.so", "libBootstrap.so", required: true);
+            if (bootstrapElf != null && bootstrapElf.IsArm64 && bootstrapBytes != null)
+            {
+                bool hasSslCertFix = ElfHeaderInspector.ContainsAscii(bootstrapBytes, "SSL_CERT_DIR");
+                report.Checks.Add(new DiagnosticCheck(
+                    "BOOTSTRAP_SSL_FIX",
+                    "libBootstrap.so",
+                    hasSslCertFix ? DiagnosticSeverity.Pass : DiagnosticSeverity.Warning,
+                    hasSslCertFix
+                        ? "libBootstrap.so includes Android SSL_CERT_DIR fix (needed for HTTPS Il2CppAssemblyGenerator/mods)."
+                        : "libBootstrap.so is missing Android SSL_CERT_DIR environment fix (pre-1ddfecd build)."));
+
+                bool hasEarlyCrashLog = ElfHeaderInspector.ContainsAscii(bootstrapBytes, "lemon_early_crash.log");
+                report.Checks.Add(new DiagnosticCheck(
+                    "BOOTSTRAP_EARLY_LOGGING",
+                    "libBootstrap.so",
+                    hasEarlyCrashLog ? DiagnosticSeverity.Pass : DiagnosticSeverity.Warning,
+                    hasEarlyCrashLog
+                        ? "libBootstrap.so includes early crash-surviving logging, signal handler, and stage isolation."
+                        : "libBootstrap.so lacks early crash-surviving logging (lemon_early_crash.log)."));
+            }
+
+            CheckArm64Elf(report, readBytes, nativePrefix + "libdobby.so", "libdobby.so", required: true);
+        }
+
         if (requireLibUnity)
             CheckArm64Elf(report, readBytes, nativePrefix + "libunity.so", "libunity.so", required: true);
 

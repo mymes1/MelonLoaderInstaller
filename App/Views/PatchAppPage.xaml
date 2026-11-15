@@ -79,6 +79,43 @@
                 </VerticalStackLayout>
             </Border>
 
+            <!-- Diagnostic Stage Isolation & libunity.so Safety Options -->
+            <Border Stroke="{StaticResource Primary}"
+                    Background="{StaticResource Primary}"
+                    StrokeShape="RoundRectangle 15,15,15,15"
+                    Padding="12"
+                    Margin="20,0,20,0">
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="MelonLoader v0.7.3 Stage &amp; Native Options"
+                           FontSize="Small"
+                           FontAttributes="Bold"
+                           TextColor="{StaticResource Light}" />
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+                        <Label Grid.Column="0"
+                               Text="Stage Mode:"
+                               VerticalTextAlignment="Center"
+                               FontSize="Caption"
+                               TextColor="{StaticResource ExtraLight}" />
+                        <Picker Grid.Column="1"
+                                ItemsSource="{Binding PatchStageOptions}"
+                                SelectedIndex="{Binding SelectedPatchStageIndex, Mode=TwoWay}"
+                                TextColor="{StaticResource Light}"
+                                FontSize="Caption" />
+                    </Grid>
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                        <Label Grid.Column="0"
+                               Text="Replace original libunity.so (leave OFF to preserve stock libunity.so)"
+                               VerticalTextAlignment="Center"
+                               FontSize="Caption"
+                               TextColor="{StaticResource ExtraLight}"
+                               LineBreakMode="WordWrap" />
+                        <Switch Grid.Column="1"
+                                IsToggled="{Binding ReplaceLibUnity, Mode=TwoWay}"
+                                OnColor="{StaticResource Light}" />
+                    </Grid>
+                </VerticalStackLayout>
+            </Border>
+
             <!-- Primary Actions -->
             <Grid ColumnDefinitions="*,*" ColumnSpacing="10" Margin="20,0,20,0">
                 <Border Grid.Column="0"
@@ -182,19 +219,34 @@
                 </Border>
             </Grid>
 
-            <Border Stroke="{StaticResource Primary}"
-                    Background="{StaticResource Primary}"
-                    StrokeShape="RoundRectangle 15,15,15,15"
-                    Padding="10"
-                    Margin="20,0,20,0">
-                <Border.GestureRecognizers>
-                    <TapGestureRecognizer Command="{Binding ViewLogsCommand}" />
-                </Border.GestureRecognizers>
-                <Label Text="View Detailed Logs"
-                       TextColor="{StaticResource ExtraLight}"
-                       FontSize="Small"
-                       HorizontalTextAlignment="Center" />
-            </Border>
+            <Grid ColumnDefinitions="*,*" ColumnSpacing="10" Margin="20,0,20,0">
+                <Border Grid.Column="0"
+                        Stroke="{StaticResource Primary}"
+                        Background="{StaticResource Primary}"
+                        StrokeShape="RoundRectangle 15,15,15,15"
+                        Padding="10">
+                    <Border.GestureRecognizers>
+                        <TapGestureRecognizer Command="{Binding ViewLogsCommand}" />
+                    </Border.GestureRecognizers>
+                    <Label Text="View Detailed Logs"
+                           TextColor="{StaticResource ExtraLight}"
+                           FontSize="Small"
+                           HorizontalTextAlignment="Center" />
+                </Border>
+                <Border Grid.Column="1"
+                        Stroke="{StaticResource Primary}"
+                        Background="{StaticResource Primary}"
+                        StrokeShape="RoundRectangle 15,15,15,15"
+                        Padding="10">
+                    <Border.GestureRecognizers>
+                        <TapGestureRecognizer Command="{Binding PullDeviceLogsCommand}" />
+                    </Border.GestureRecognizers>
+                    <Label Text="Pull ADB Crash Logs"
+                           TextColor="{StaticResource Light}"
+                           FontSize="Small"
+                           HorizontalTextAlignment="Center" />
+                </Border>
+            </Grid>
 
             <Border x:Name="CustomPatchButton"
                     Stroke="{StaticResource Primary}"

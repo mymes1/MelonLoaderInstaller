@@ -35,13 +35,56 @@ public class PatchAppPageViewModel : BindableObject
 
     private static UnityApplicationFinder.Data? _currentAppData;
 
-    private string _diagnosticSummary = "Click 'Analyze APK' or 'Diagnose LemonLoader' to inspect Unity version, ABI, and LemonLoader 0.6.5+ dependencies.";
+    private string _diagnosticSummary = "Click 'Analyze APK' or 'Diagnose LemonLoader' to inspect Unity version, ABI, and MelonLoader v0.7.3 Open-Beta dependencies.";
     public string DiagnosticSummary
     {
         get => _diagnosticSummary;
         set
         {
             _diagnosticSummary = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public IReadOnlyList<string> PatchStageOptions { get; } =
+    [
+        "Full (MelonLoader v0.7.3)",
+        "NoHooks (Stock libunity only)",
+        "MinimalBootstrap (JNI only)",
+        "Il2CppInitOnly (Skip CoreCLR)"
+    ];
+
+    public int SelectedPatchStageIndex
+    {
+        get => PatchRunner.ActivePatchStage switch
+        {
+            LemonPatchStage.Full => 0,
+            LemonPatchStage.NoHooks => 1,
+            LemonPatchStage.MinimalBootstrap => 2,
+            LemonPatchStage.Il2CppInitOnly => 3,
+            _ => 0
+        };
+        set
+        {
+            PatchRunner.ActivePatchStage = value switch
+            {
+                1 => LemonPatchStage.NoHooks,
+                2 => LemonPatchStage.MinimalBootstrap,
+                3 => LemonPatchStage.Il2CppInitOnly,
+                _ => LemonPatchStage.Full
+            };
+            OnPropertyChanged();
+        }
+    }
+
+    public bool ReplaceLibUnity
+    {
+        get => PatchRunner.ReplaceLibUnity;
+        set
+        {
+            if (PatchRunner.ReplaceLibUnity == value)
+                return;
+            PatchRunner.ReplaceLibUnity = value;
             OnPropertyChanged();
         }
     }
@@ -54,6 +97,7 @@ public class PatchAppPageViewModel : BindableObject
     public ICommand SignApkCommand { get; }
     public ICommand SavePatchedApkCommand { get; }
     public ICommand ViewLogsCommand { get; }
+    public ICommand PullDeviceLogsCommand { get; }
     public ICommand CustomPatchCommand { get; }
     public ICommand PatchLocalTappedCommand { get; }
     public ICommand RestoreTappedCommand { get; }
@@ -68,6 +112,7 @@ public class PatchAppPageViewModel : BindableObject
         SignApkCommand = new Command(SignApkAsync);
         SavePatchedApkCommand = new Command(SavePatchedApkAsync);
         ViewLogsCommand = new Command(ViewLogsAsync);
+        PullDeviceLogsCommand = new Command(PullDeviceLogsAsync);
         CustomPatchCommand = new Command(SelectCustomPatch);
         PatchLocalTappedCommand = new Command(SelectLocalDepsWithPatch);
         RestoreTappedCommand = new Command(RestoreUnpatchedAPK);
@@ -357,6 +402,11 @@ public class PatchAppPageViewModel : BindableObject
     private async void ViewLogsAsync()
     {
         await PatchRunner.OpenDetailedLogsAsync();
+    }
+
+    private async void PullDeviceLogsAsync()
+    {
+        await PatchRunner.BeginPullDeviceDiagnostics(CurrentAppData.PackageName);
     }
 
     private async void SelectCustomPatch()

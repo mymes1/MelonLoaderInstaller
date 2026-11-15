@@ -87,6 +87,38 @@ public static class PatchRunner
         page.Log = GetCurrentOrLatestLogContent();
     }
 
+    public static async Task BeginPullDeviceDiagnostics(string? packageName)
+    {
+        if (_isPatching)
+            return;
+
+        _isPatching = true;
+        try
+        {
+            Reset();
+            await PrepareConsoleAsync("Pulling ADB Device Diagnostics...");
+
+            await Task.Run(async () =>
+            {
+                string outDir = Path.Combine(GetBaseAppDataPath(), "DeviceLogs");
+                var (hasDevice, rawPath, summary) = await ADBManager.CaptureDeviceDiagnosticsAsync(packageName, outDir);
+                _logger?.Log(summary);
+                if (hasDevice)
+                    _logger?.Log($"Saved full raw ADB logcat & crash bundle to [ {rawPath} ]");
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger?.Log("[ERROR] " + ex);
+        }
+        finally
+        {
+            _isPatching = false;
+            if (_consolePage != null)
+                MainThread.BeginInvokeOnMainThread(() => _consolePage.BackButtonVisible = true);
+        }
+    }
+
     public static async Task<ApkAnalysisReport?> BeginAnalyze(UnityApplicationFinder.Data data)
     {
         if (_isPatching)
@@ -254,7 +286,14 @@ public static class PatchRunner
                     ? ActiveRepairedMelonDataPath
                     : await LemonLoaderRepairer.ResolveOrDownloadRepairedBundleAsync(_logger!);
 
-                var report = LemonLoaderRepairer.RepairPatchedApk(inputApkPath, outputApkPath, repairedBundle, localUnityDepsPath, _logger!);
+                var report = LemonLoaderRepairer.RepairPatchedApk(
+                    inputApkPath,
+                    outputApkPath,
+                    repairedBundle,
+                    localUnityDepsPath,
+                    _logger!,
+                    replaceLibUnity: ReplaceLibUnity,
+                    stage: ActivePatchStage);
                 if (!report.IsHealthy)
                     throw new InvalidOperationException("Repaired APK still has critical diagnostic issues.");
 

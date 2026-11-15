@@ -363,11 +363,104 @@ public sealed class InstallerTests : IDisposable
         Assert.True(apkDiag.IsHealthy, apkDiag.FormatReport());
 
         var postApk = ApkAnalyzer.Analyze(repairedApk);
-        Assert.Contains("libBootstrap.so", postApk.Arm64Libraries.Keys);
         Assert.Contains("libmain.so", postApk.Arm64Libraries.Keys);
-        Assert.Contains("JNI_OnLoad", postApk.Arm64Libraries["libBootstrap.so"].ExportedSymbols);
-        Assert.Contains("startup", postApk.Arm64Libraries["libBootstrap.so"].ExportedSymbols);
         Assert.Contains("JNI_OnLoad", postApk.Arm64Libraries["libmain.so"].ExportedSymbols);
+
+        if (postApk.Arm64Libraries.ContainsKey("libBootstrap.so"))
+        {
+            Assert.Contains("JNI_OnLoad", postApk.Arm64Libraries["libBootstrap.so"].ExportedSymbols);
+            Assert.Contains("startup", postApk.Arm64Libraries["libBootstrap.so"].ExportedSymbols);
+        }
+        else
+        {
+            // v0.7.3 NativeAOT single-library layout: libmain.so exports JNI_OnLoad + BootstrapInterop exports
+            Assert.DoesNotContain("libBootstrap.so", postApk.Arm64Libraries.Keys);
+            Assert.DoesNotContain("libdobby.so", postApk.Arm64Libraries.Keys);
+            Assert.Contains("GetJavaVM", postApk.Arm64Libraries["libmain.so"].ExportedSymbols);
+            Assert.Contains("GetLoaderConfig", postApk.Arm64Libraries["libmain.so"].ExportedSymbols);
+            Assert.Contains(diag.Checks, c => c.Id == "CPP2IL_CORE_DLL" && c.Severity == Core.Diagnostics.DiagnosticSeverity.Pass);
+        }
+    }
+
+    [Fact]
+    public void Diagnostics_PassesNativeAot073Layout_AndRemovesStale06XLibsOnPatch()
+    {
+        byte[] runtimeInitBytes = CompileCSharpAssembly("Il2CppInterop.Runtime", """
+            namespace Il2CppInterop.Runtime.Injection {
+                public class RegisterTypeOptions {
+                    public bool LogSuccess { get; init; } = true;
+                }
+            }
+            """);
+        byte[] il2cppMatchingBytes = CompileCSharpAssembly("Il2Cpp", """
+            namespace MelonLoader.Support {
+                public class Main {
+                    public static void Test() {
+                        var _ = new Il2CppInterop.Runtime.Injection.RegisterTypeOptions { LogSuccess = true };
+                    }
+                }
+            }
+            """,
+            MetadataReference.CreateFromImage(runtimeInitBytes));
+        byte[] ml073Bytes = CompileCSharpAssembly("MelonLoader", """
+            namespace MelonLoader.Fixes.Il2CppInterop {
+                public static class Il2CppICallInjector { }
+            }
+            """);
+        byte[] harmonyBytes = CompileCSharpAssembly("0Harmony", "namespace HarmonyLib { public static class PatchFunctions { public static void ReversePatch() {} } }");
+        byte[] genericValidPe = CompileCSharpAssembly("GenericLib", "namespace Dummy { public class Placeholder {} }");
+        byte[] libMainElf = CreateArm64ElfWithDynamicAndSymbols(
+            soname: "libmain.so",
+            needed: ["liblog.so", "libdl.so", "libc.so"],
+            exports: ["JNI_OnLoad", "GetJavaVM", "GetLoaderConfig", "LogMsg"]);
+        // Embed SSL_CERT_DIR and lemon_early_crash.log markers in spare bytes
+        Array.Resize(ref libMainElf, Math.Max(libMainElf.Length, 1024));
+        Encoding.ASCII.GetBytes("SSL_CERT_DIR").CopyTo(libMainElf, libMainElf.Length - 128);
+        Encoding.ASCII.GetBytes("lemon_early_crash.log").CopyTo(libMainElf, libMainElf.Length - 64);
+
+        string bundle073 = Path.Combine(_workDir, "melon_073_nativeaot.zip");
+        using (var fs = File.Create(bundle073))
+        using (var zip = new ZipArchive(fs, ZipArchiveMode.Create))
+        {
+            void WriteBytes(string path, byte[] data)
+            {
+                var e = zip.CreateEntry(path);
+                using var s = e.Open();
+                s.Write(data);
+            }
+
+            WriteBytes("MelonLoader/net6/MelonLoader.dll", ml073Bytes);
+            WriteBytes("MelonLoader/net6/Il2CppInterop.Runtime.dll", runtimeInitBytes);
+            WriteBytes("MelonLoader/net6/0Harmony.dll", harmonyBytes);
+            WriteBytes("MelonLoader/net6/Il2CppInterop.HarmonySupport.dll", genericValidPe);
+            WriteBytes("MelonLoader/net6/Il2CppInterop.Common.dll", genericValidPe);
+            WriteBytes("MelonLoader/net6/Il2CppInterop.Generator.dll", genericValidPe);
+            WriteBytes("MelonLoader/net6/MonoMod.RuntimeDetour.dll", genericValidPe);
+            WriteBytes("MelonLoader/net6/MelonLoader.NativeHost.dll", genericValidPe);
+            WriteBytes("MelonLoader/net6/MelonLoader.runtimeconfig.json", Encoding.UTF8.GetBytes("{}"));
+            WriteBytes("MelonLoader/Dependencies/SupportModules/Il2Cpp.dll", il2cppMatchingBytes);
+            WriteBytes("MelonLoader/Dependencies/Il2CppAssemblyGenerator/Il2CppAssemblyGenerator.dll", genericValidPe);
+            WriteBytes("MelonLoader/Dependencies/Il2CppAssemblyGenerator/Cpp2IL.Core.dll", genericValidPe);
+            WriteBytes("dotnet/host/fxr/8.0.6/libhostfxr.so", CreateFakeArm64Elf());
+            WriteBytes("dotnet/shared/Microsoft.NETCore.App/8.0.6/libcoreclr.so", CreateFakeArm64Elf());
+            WriteBytes("dotnet/shared/Microsoft.NETCore.App/8.0.6/System.Runtime.dll", genericValidPe);
+            WriteBytes("native/libmain.so", libMainElf);
+        }
+
+        var bundleDiag = LemonDataDiagnostics.Inspect(bundle073);
+        Assert.True(bundleDiag.IsHealthy, bundleDiag.FormatReport());
+        Assert.Contains(bundleDiag.Checks, c => c.Id == "MAIN_JNI_ONLOAD" && c.Severity == Core.Diagnostics.DiagnosticSeverity.Pass);
+
+        string inputApk = CreateSyntheticUnityApk(
+            Path.Combine(_workDir, "game_073.apk"),
+            packageName: "com.sdt.port",
+            unityVersion: "2022.3.54f1",
+            extractNativeLibs: false,
+            targetSdk: 35);
+
+        string patchedApk = Path.Combine(_workDir, "game_073_patched.apk");
+        var apkDiag = LemonLoaderRepairer.RepairPatchedApk(inputApk, patchedApk, bundle073, null, new ListLogger());
+        Assert.True(apkDiag.IsHealthy, apkDiag.FormatReport());
     }
 
     private static byte[] CompileCSharpAssembly(string assemblyName, string code, params MetadataReference[] extraRefs)

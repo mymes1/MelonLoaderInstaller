@@ -12,17 +12,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup .NET 8 SDK
+      - name: Setup .NET 8 and .NET 9 SDKs
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "8.0.x"
+          dotnet-version: |
+            8.0.x
+            9.0.x
 
-      - name: Setup Rust stable + aarch64-linux-android
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android
-
-      - name: Build repaired LemonLoader melon_data_repaired.zip from official fork sources
+      - name: Build MelonLoader v0.7.3 Open-Beta Android NativeAOT melon_data_repaired.zip
         run: |
           chmod +x RepairPatches/build_lemon_repaired.sh
           set -o pipefail

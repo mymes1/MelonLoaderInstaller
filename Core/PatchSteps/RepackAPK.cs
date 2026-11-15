@@ -51,10 +51,18 @@ internal class RepackAPK : IPatchStep
         string unityOverrideDir = Path.Combine(patcher.Info.UnityNativeDirectory, "arm64-v8a");
         bool hasUnityOverride = Directory.Exists(unityOverrideDir) && Directory.GetFiles(unityOverrideDir, "*.so", SearchOption.AllDirectories).Length > 0;
 
+        string nativeDir = Path.Combine(patcher.Info.LemonDataDirectory, "native");
+        bool isSingleMainNativeAot = !File.Exists(Path.Combine(nativeDir, "libBootstrap.so"));
+
         // libs data
         if (!patcher.Args.IsSplit)
         {
-            CopyTo(archive, Path.Combine(patcher.Info.LemonDataDirectory, "native"), "lib/arm64-v8a", "*.so");
+            if (isSingleMainNativeAot)
+            {
+                archive.GetEntry("lib/arm64-v8a/libBootstrap.so")?.Delete();
+                archive.GetEntry("lib/arm64-v8a/libdobby.so")?.Delete();
+            }
+            CopyTo(archive, nativeDir, "lib/arm64-v8a", "*.so");
             if (hasUnityOverride)
                 CopyTo(archive, unityOverrideDir, "lib/arm64-v8a", "*.so");
             else
@@ -65,7 +73,12 @@ internal class RepackAPK : IPatchStep
             using FileStream libStream = File.Open(patcher.Info.OutputLibApkPath!, FileMode.Open);
             using ZipArchive libArchive = new(libStream, ZipArchiveMode.Read | ZipArchiveMode.Update);
 
-            CopyTo(libArchive, Path.Combine(patcher.Info.LemonDataDirectory, "native"), "lib/arm64-v8a", "*.so");
+            if (isSingleMainNativeAot)
+            {
+                libArchive.GetEntry("lib/arm64-v8a/libBootstrap.so")?.Delete();
+                libArchive.GetEntry("lib/arm64-v8a/libdobby.so")?.Delete();
+            }
+            CopyTo(libArchive, nativeDir, "lib/arm64-v8a", "*.so");
             if (hasUnityOverride)
                 CopyTo(libArchive, unityOverrideDir, "lib/arm64-v8a", "*.so");
             else

@@ -278,7 +278,13 @@ public static class LemonLoaderRepairer
                 WritePatchDate(archive);
                 WriteStageConfig(archive, stage);
 
-                CopyDirectoryToArchive(archive, Path.Combine(bundleExtract, "native"), "lib/arm64-v8a", "*.so");
+                string nativeSrcDir = Path.Combine(bundleExtract, "native");
+                if (!File.Exists(Path.Combine(nativeSrcDir, "libBootstrap.so")))
+                {
+                    archive.GetEntry("lib/arm64-v8a/libBootstrap.so")?.Delete();
+                    archive.GetEntry("lib/arm64-v8a/libdobby.so")?.Delete();
+                }
+                CopyDirectoryToArchive(archive, nativeSrcDir, "lib/arm64-v8a", "*.so");
                 if (Directory.GetFiles(unityArm64Dir, "*.so", SearchOption.AllDirectories).Length > 0)
                     CopyDirectoryToArchive(archive, unityArm64Dir, "lib/arm64-v8a", "*.so");
             }

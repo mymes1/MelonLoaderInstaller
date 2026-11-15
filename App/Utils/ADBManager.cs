@@ -1,4 +1,4 @@
-﻿using AdvancedSharpAdbClient.Models;
+using AdvancedSharpAdbClient.Models;
 using AdvancedSharpAdbClient;
 using AdvancedSharpAdbClient.Receivers;
 using System.Reflection;
@@ -239,6 +239,113 @@ internal static partial class ADBManager
             return;
 
         await _adbClient.ExecuteShellCommandAsync(_deviceData.Value, $"find \"{path}\" -type d -exec chmod 760 {{}} \\; -o -type f -exec chmod 660 {{}} \\;");
+    }
+
+    public static async Task<string> RunShellCommandCaptureAsync(string shellCommand)
+    {
+        if (!_initialized)
+            Initialize();
+
+        var devices = GetDevices().ToList();
+        if (_deviceData == null && devices.Count > 0)
+            _deviceData = devices[0];
+
+        if (_deviceData == null || _adbClient == null)
+            throw new InvalidOperationException("No ADB device connected.");
+
+        ConsoleOutputReceiver receiver = new();
+        await _adbClient.ExecuteRemoteCommandAsync(shellCommand, _deviceData.Value, receiver);
+        return receiver.ToString();
+    }
+
+    public static async Task<(bool HasDevice, string RawLogcatPath, string Summary)> CaptureDeviceDiagnosticsAsync(string? packageName, string outputDir)
+    {
+        if (!_initialized)
+            Initialize();
+
+        var devices = GetDevices().ToList();
+        if (_deviceData == null && devices.Count > 0)
+            _deviceData = devices[0];
+
+        if (_deviceData == null || _adbClient == null)
+            return (false, "", "No ADB device connected. Connect your tablet/phone with USB debugging enabled (or select it in ADB Devices).");
+
+        Directory.CreateDirectory(outputDir);
+        string stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+        string fullLogPath = Path.Combine(outputDir, $"adb_diagnostics_{stamp}.log");
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"=== Device: {_deviceData.Value.Name} ({_deviceData.Value.Serial}) ===");
+        sb.AppendLine($"=== Package: {packageName ?? "<unspecified>"} ===");
+
+        if (!string.IsNullOrWhiteSpace(packageName) && packageName != "No app selected.")
+        {
+            sb.AppendLine();
+            sb.AppendLine("--- [1] /data/data/<pkg>/files/lemon_early_crash.log (run-as) ---");
+            string internalEarly = await SafeShellAsync($"run-as {packageName} cat files/lemon_early_crash.log");
+            sb.AppendLine(string.IsNullOrWhiteSpace(internalEarly) ? "<empty or unavailable>" : internalEarly.TrimEnd());
+
+            sb.AppendLine();
+            sb.AppendLine("--- [2] /sdcard/Android/data/<pkg>/files/lemon_early_crash.log ---");
+            string extEarly = await SafeShellAsync($"cat /sdcard/Android/data/{packageName}/files/lemon_early_crash.log");
+            sb.AppendLine(string.IsNullOrWhiteSpace(extEarly) ? "<empty or unavailable>" : extEarly.TrimEnd());
+
+            sb.AppendLine();
+            sb.AppendLine("--- [3] /sdcard/MelonLoader/<pkg>/MelonLoader/Latest-Bootstrap.log ---");
+            string bootLog = await SafeShellAsync($"cat /sdcard/MelonLoader/{packageName}/MelonLoader/Latest-Bootstrap.log");
+            sb.AppendLine(string.IsNullOrWhiteSpace(bootLog) ? "<empty or unavailable>" : bootLog.TrimEnd());
+
+            sb.AppendLine();
+            sb.AppendLine("--- [4] /sdcard/MelonLoader/<pkg>/MelonLoader/Latest.log ---");
+            string latestLog = await SafeShellAsync($"cat /sdcard/MelonLoader/{packageName}/MelonLoader/Latest.log");
+            sb.AppendLine(string.IsNullOrWhiteSpace(latestLog) ? "<empty or unavailable>" : latestLog.TrimEnd());
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("--- [5] Filtered logcat (-b main,crash,system -v threadtime) ---");
+        string logcat = await SafeShellAsync("logcat -d -b main,crash,system -v threadtime");
+        string[] lines = logcat.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+
+        var interesting = lines.Where(l =>
+            l.Contains("LemonEarly", StringComparison.OrdinalIgnoreCase) ||
+            l.Contains("MelonLoader", StringComparison.OrdinalIgnoreCase) ||
+            l.Contains("MelonProxy", StringComparison.OrdinalIgnoreCase) ||
+            l.Contains("libBootstrap", StringComparison.OrdinalIgnoreCase) ||
+            l.Contains("libmain", StringComparison.OrdinalIgnoreCase) ||
+            l.Contains("Fatal signal", StringComparison.OrdinalIgnoreCase) ||
+            l.Contains("FATAL EXCEPTION", StringComparison.OrdinalIgnoreCase) ||
+            l.Contains("F DEBUG", StringComparison.OrdinalIgnoreCase) ||
+            l.Contains("SIGSEGV", StringComparison.OrdinalIgnoreCase) ||
+            l.Contains("SIGABRT", StringComparison.OrdinalIgnoreCase) ||
+            l.Contains("SIGBUS", StringComparison.OrdinalIgnoreCase) ||
+            l.Contains("AndroidRuntime", StringComparison.OrdinalIgnoreCase) ||
+            l.Contains("Unity", StringComparison.OrdinalIgnoreCase) ||
+            l.Contains("dlopen", StringComparison.OrdinalIgnoreCase) ||
+            (!string.IsNullOrWhiteSpace(packageName) && l.Contains(packageName, StringComparison.OrdinalIgnoreCase)))
+            .TakeLast(250)
+            .ToArray();
+
+        if (interesting.Length == 0)
+            sb.AppendLine("<no matching LemonEarly / MelonLoader / crash lines in current logcat buffer>");
+        else
+            foreach (string line in interesting)
+                sb.AppendLine(line);
+
+        string summary = sb.ToString();
+        await File.WriteAllTextAsync(fullLogPath, summary + Environment.NewLine + Environment.NewLine + "=== RAW LOGCAT ===" + Environment.NewLine + logcat);
+        return (true, fullLogPath, summary);
+    }
+
+    private static async Task<string> SafeShellAsync(string cmd)
+    {
+        try
+        {
+            return await RunShellCommandCaptureAsync(cmd);
+        }
+        catch (Exception ex)
+        {
+            return $"<error: {ex.Message}>";
+        }
     }
 
     private static async Task CallADBDirect(string command)
