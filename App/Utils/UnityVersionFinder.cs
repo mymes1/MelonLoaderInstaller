@@ -1,4 +1,4 @@
-﻿using AssetsTools.NET.Extra;
+using AssetsTools.NET.Extra;
 using System.IO.Compression;
 using UnityVersion = AssetRipper.Primitives.UnityVersion;
 
@@ -13,7 +13,10 @@ public static class UnityVersionFinder
             return await AndroidParseUnityVersion(data);
 #endif
         if (data.Source == UnityApplicationFinder.Source.File)
-            return await FileParseUnityVersion(data, data.APKPaths.First());
+        {
+            var layout = MelonLoader.Installer.Core.Repair.SplitApkBundleExtractor.ResolveApkLayout(data.APKPaths);
+            return await FileParseUnityVersion(data, layout.BaseApkPath);
+        }
 
         if (data.Source == UnityApplicationFinder.Source.ADB)
             return await ADBParseUnityVersion(data, tempPath);

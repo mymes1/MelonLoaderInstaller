@@ -21,24 +21,18 @@ public class Patcher(PatchArguments arguments, IPatchLogger logger)
         {
             Info.CreateDirectories();
 
-            Logger.Log($"Copying [ {Args.TargetApkPath} ] to [ {Info.OutputBaseApkPath} ]");
-            File.Copy(Args.TargetApkPath, Info.OutputBaseApkPath, overwrite: true);
+            CopyIfDifferent(Args.TargetApkPath, Info.OutputBaseApkPath);
 
-            if (Args.IsSplit)
+            if (!string.IsNullOrEmpty(Info.OutputLibApkPath))
             {
-                Logger.Log($"Copying [ {Args.LibraryApkPath} ] to [ {Info.OutputLibApkPath} ]");
-                File.Copy(Args.LibraryApkPath!, Info.OutputLibApkPath!, overwrite: true);
+                CopyIfDifferent(Args.LibraryApkPath!, Info.OutputLibApkPath);
             }
 
-            if (Args.ExtraSplitApkPaths != null)
+            if (Args.ExtraSplitApkPaths != null && Info.OutputExtraApkPaths != null)
             {
                 for (int i = 0; i < Args.ExtraSplitApkPaths.Length; i++)
                 {
-                    string from = Args.ExtraSplitApkPaths[i];
-                    string to = Info.OutputExtraApkPaths![i];
-
-                    Logger.Log($"Copying [ {from} ] to [ {to} ]");
-                    File.Copy(from, to, overwrite: true);
+                    CopyIfDifferent(Args.ExtraSplitApkPaths[i], Info.OutputExtraApkPaths[i]);
                 }
             }
 
@@ -70,5 +64,16 @@ public class Patcher(PatchArguments arguments, IPatchLogger logger)
         }
 
         return success;
+    }
+
+    private void CopyIfDifferent(string sourcePath, string destPath)
+    {
+        string fullSrc = Path.GetFullPath(sourcePath);
+        string fullDst = Path.GetFullPath(destPath);
+        if (string.Equals(fullSrc, fullDst, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        Logger.Log($"Copying [ {sourcePath} ] to [ {destPath} ]");
+        File.Copy(sourcePath, destPath, overwrite: true);
     }
 }

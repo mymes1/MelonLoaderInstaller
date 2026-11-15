@@ -58,32 +58,57 @@ public static class SplitApkBundleExtractor
         if (extractedApks.Count == 0)
             throw new InvalidOperationException("Archive does not contain any .apk files.");
 
-        string? baseApk = extractedApks.FirstOrDefault(p =>
-            Path.GetFileName(p).Equals("base.apk", StringComparison.OrdinalIgnoreCase))
-            ?? extractedApks.FirstOrDefault(p =>
-            {
-                using var s = File.OpenRead(p);
-                using var z = new ZipArchive(s, ZipArchiveMode.Read);
-                return z.GetEntry("assets/bin/Data/globalgamemanagers") != null
-                    || z.GetEntry("assets/bin/Data/data.unity3d") != null;
-            })
-            ?? extractedApks[0];
+        return ResolveApkLayout(extractedApks, destinationDirectory);
+    }
 
-        string? arm64Split = extractedApks.FirstOrDefault(p =>
-            p != baseApk &&
+    public static ExtractedSplitBundle ResolveApkLayout(IEnumerable<string> apkPaths, string? extractDirectory = null)
+    {
+        var list = apkPaths.Where(p => !string.IsNullOrWhiteSpace(p)).ToList();
+        if (list.Count == 0)
+            throw new ArgumentException("At least one APK path is required.", nameof(apkPaths));
+
+        string? baseApk = list.FirstOrDefault(p =>
+            Path.GetFileName(p).Equals("base.apk", StringComparison.OrdinalIgnoreCase))
+            ?? list.FirstOrDefault(HasUnityDataEntries)
+            ?? list.FirstOrDefault(p => !Path.GetFileName(p).StartsWith("split_", StringComparison.OrdinalIgnoreCase))
+            ?? list[0];
+
+        string? arm64Split = list.FirstOrDefault(p =>
+            !string.Equals(p, baseApk, StringComparison.OrdinalIgnoreCase) &&
             (Path.GetFileName(p).Contains("arm64", StringComparison.OrdinalIgnoreCase) || HasArm64Libs(p)));
 
-        string[] extraSplits = extractedApks
-            .Where(p => p != baseApk && p != arm64Split)
+        string[] extraSplits = list
+            .Where(p => !string.Equals(p, baseApk, StringComparison.OrdinalIgnoreCase)
+                     && !string.Equals(p, arm64Split, StringComparison.OrdinalIgnoreCase))
             .ToArray();
 
-        return new ExtractedSplitBundle(destinationDirectory, baseApk, arm64Split, extraSplits);
+        string dir = extractDirectory ?? (Path.GetDirectoryName(baseApk) ?? "");
+        return new ExtractedSplitBundle(dir, baseApk, arm64Split, extraSplits);
+    }
+
+    private static bool HasUnityDataEntries(string apkPath)
+    {
+        try
+        {
+            if (!File.Exists(apkPath))
+                return false;
+            using var s = File.OpenRead(apkPath);
+            using var z = new ZipArchive(s, ZipArchiveMode.Read);
+            return z.GetEntry("assets/bin/Data/globalgamemanagers") != null
+                || z.GetEntry("assets/bin/Data/data.unity3d") != null;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static bool HasArm64Libs(string apkPath)
     {
         try
         {
+            if (!File.Exists(apkPath))
+                return false;
             using var fs = File.OpenRead(apkPath);
             using var z = new ZipArchive(fs, ZipArchiveMode.Read);
             return z.Entries.Any(e => e.FullName.Replace('\\', '/').StartsWith("lib/arm64-v8a/", StringComparison.OrdinalIgnoreCase));

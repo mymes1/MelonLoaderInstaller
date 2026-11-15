@@ -23,6 +23,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.zip.ZipFile;
 
 import com.melonloader.nativeapplisting.UnityApplicationData.Status;
 
@@ -82,16 +83,16 @@ public class Core {
 
                 boolean hasBootstrap = Arrays.stream(files).anyMatch(f -> f.getName().contains("libBootstrap.so"));
                 boolean hasDobby = Arrays.stream(files).anyMatch(f -> f.getName().contains("libdobby.so"));
-                if (hasBootstrap && hasDobby)
+                boolean hasMain = Arrays.stream(files).anyMatch(f -> f.getName().contains("libmain.so"));
+                if ((hasBootstrap && hasDobby) || (hasMain && hasMelonLoaderAssets(info.publicSourceDir)))
                     status = Status.Patched;
 
                 String label = (String) pkg.getApplicationLabel(info);
 
                 List<String> apkPaths = new ArrayList<>();
-                if (info.splitPublicSourceDirs != null)
-                    apkPaths = new ArrayList<>(Arrays.asList(info.splitPublicSourceDirs));
-
                 apkPaths.add(info.publicSourceDir);
+                if (info.splitPublicSourceDirs != null)
+                    apkPaths.addAll(Arrays.asList(info.splitPublicSourceDirs));
 
                 Drawable icon = info.loadIcon(pkg);
 
@@ -115,6 +116,17 @@ public class Core {
         }
 
         System.exit(0);
+    }
+
+    private static boolean hasMelonLoaderAssets(String apkPath) {
+        if (apkPath == null || apkPath.isEmpty())
+            return false;
+        try (ZipFile zf = new ZipFile(apkPath)) {
+            return zf.getEntry("assets/MelonLoader/net6/MelonLoader.dll") != null
+                || zf.getEntry("assets/lemon_patch_date.txt") != null;
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     public static String drawableToBase64(Drawable drawable) {

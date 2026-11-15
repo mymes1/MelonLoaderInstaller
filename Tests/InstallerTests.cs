@@ -521,6 +521,159 @@ public sealed class InstallerTests : IDisposable
         Assert.True(apkDiag.IsHealthy, apkDiag.FormatReport());
     }
 
+    [Fact]
+    public void SplitBundle_ResolveApkLayout_And_Patcher_HandlesReversedOrderAndNoArm64Split()
+    {
+        byte[] runtimeInitBytes = CompileCSharpAssembly("Il2CppInterop.Runtime", """
+            namespace Il2CppInterop.Runtime.Injection {
+                public class RegisterTypeOptions {
+                    public bool LogSuccess { get; init; } = true;
+                }
+            }
+            """);
+        byte[] il2cppMatchingBytes = CompileCSharpAssembly("Il2Cpp", """
+            namespace MelonLoader.Support {
+                public class Main {
+                    public static void Test() {
+                        var _ = new Il2CppInterop.Runtime.Injection.RegisterTypeOptions { LogSuccess = true };
+                    }
+                }
+            }
+            """,
+            MetadataReference.CreateFromImage(runtimeInitBytes));
+        byte[] repairedMlBytes = CompileCSharpAssembly("MelonLoader", """
+            namespace MelonLoader.Fixes {
+                public static class DotnetAssemblyLoadContextFix { }
+                public static class Il2CppInteropFixes { }
+            }
+            """);
+
+        string repairedZip = Path.Combine(_workDir, "repaired_split.zip");
+        BuildMelonDataArchive(repairedZip, repairedMlBytes, runtimeInitBytes, il2cppMatchingBytes, includeSslFix: true);
+
+        // Case 1: ADB / Core.java reversed order [split_config.arm64_v8a.apk, split_config.xxxhdpi.apk, base.apk]
+        // already located inside outDir (src == dst copy guard)
+        string outDir1 = Path.Combine(_workDir, "split_out_1");
+        string tempDir1 = Path.Combine(_workDir, "split_temp_1");
+        Directory.CreateDirectory(outDir1);
+        Directory.CreateDirectory(tempDir1);
+
+        string baseApk1 = Path.Combine(outDir1, "base.apk");
+        string arm64Apk1 = Path.Combine(outDir1, "split_config.arm64_v8a.apk");
+        string dpiApk1 = Path.Combine(outDir1, "split_config.xxxhdpi.apk");
+
+        using (var fs = File.Create(baseApk1))
+        using (var zip = new ZipArchive(fs, ZipArchiveMode.Create))
+        {
+            void Add(string name, byte[] bytes)
+            {
+                var e = zip.CreateEntry(name, CompressionLevel.Optimal);
+                using var s = e.Open();
+                s.Write(bytes);
+            }
+            Add("AndroidManifest.xml", CreateBinaryManifestBytes("com.sonicdreamteam.android", extractNativeLibs: false, targetSdk: 35));
+            Add("assets/bin/Data/globalgamemanagers", CreateMinimalAssetsFileBytes("2022.3.54f1"));
+        }
+
+        using (var fs = File.Create(arm64Apk1))
+        using (var zip = new ZipArchive(fs, ZipArchiveMode.Create))
+        {
+            void Add(string name, byte[] bytes)
+            {
+                var e = zip.CreateEntry(name, CompressionLevel.Optimal);
+                using var s = e.Open();
+                s.Write(bytes);
+            }
+            Add("AndroidManifest.xml", CreateBinaryManifestBytes("com.sonicdreamteam.android", extractNativeLibs: false, targetSdk: 35));
+            Add("lib/arm64-v8a/libunity.so", CreateFakeArm64Elf());
+            Add("lib/arm64-v8a/libil2cpp.so", CreateFakeArm64Elf());
+        }
+
+        using (var fs = File.Create(dpiApk1))
+        using (var zip = new ZipArchive(fs, ZipArchiveMode.Create))
+        {
+            var e = zip.CreateEntry("AndroidManifest.xml", CompressionLevel.Optimal);
+            using var s = e.Open();
+            s.Write(CreateBinaryManifestBytes("com.sonicdreamteam.android", extractNativeLibs: true, targetSdk: 35));
+        }
+
+        var layout1 = SplitApkBundleExtractor.ResolveApkLayout([arm64Apk1, dpiApk1, baseApk1]);
+        Assert.Equal(baseApk1, layout1.BaseApkPath);
+        Assert.Equal(arm64Apk1, layout1.Arm64SplitApkPath);
+        Assert.Single(layout1.ExtraSplitApkPaths);
+        Assert.Equal(dpiApk1, layout1.ExtraSplitApkPaths[0]);
+
+        var logger1 = new ListLogger();
+        var args1 = new PatchArguments(
+            layout1.BaseApkPath,
+            layout1.Arm64SplitApkPath!,
+            layout1.ExtraSplitApkPaths,
+            outDir1,
+            tempDir1,
+            repairedZip,
+            "",
+            null,
+            "com.sonicdreamteam.android",
+            true);
+        Assert.True(new Patcher(args1, logger1).Run(), string.Join('\n', logger1.Lines));
+
+        var splitReport = ApkAnalyzer.Analyze(baseApk1, arm64Apk1, dpiApk1);
+        Assert.True(splitReport.HasMelonLoaderAssets);
+        Assert.True(splitReport.HasDotnetAssets);
+        Assert.True(splitReport.HasLibMain);
+        Assert.True(splitReport.ExtractNativeLibs);
+        Assert.True(splitReport.HasV2SignatureBlock);
+        AssertApkSigningBlockHasV2AndV3(baseApk1);
+        AssertApkSigningBlockHasV2AndV3(arm64Apk1);
+        AssertApkSigningBlockHasV2AndV3(dpiApk1);
+        AssertAllStoredSoEntriesAre16KbAligned(arm64Apk1);
+
+        // Case 2: Split bundle with base.apk + asset split (no arm64 split) -> libs go into base.apk cleanly
+        string outDir2 = Path.Combine(_workDir, "split_out_2");
+        string tempDir2 = Path.Combine(_workDir, "split_temp_2");
+        Directory.CreateDirectory(outDir2);
+        Directory.CreateDirectory(tempDir2);
+
+        string srcBase2 = CreateSyntheticUnityApk(
+            Path.Combine(_workDir, "case2_base.apk"),
+            packageName: "com.example.splitnoarm64",
+            unityVersion: "2022.3.54f1",
+            extractNativeLibs: false,
+            targetSdk: 35);
+        string srcAssetSplit2 = Path.Combine(_workDir, "case2_assets.apk");
+        using (var fs = File.Create(srcAssetSplit2))
+        using (var zip = new ZipArchive(fs, ZipArchiveMode.Create))
+        {
+            var e = zip.CreateEntry("assets/pack.bin", CompressionLevel.Optimal);
+            using var s = e.Open();
+            s.Write([1, 2, 3, 4]);
+        }
+
+        var layout2 = SplitApkBundleExtractor.ResolveApkLayout([srcAssetSplit2, srcBase2]);
+        Assert.Equal(srcBase2, layout2.BaseApkPath);
+        Assert.Null(layout2.Arm64SplitApkPath);
+        Assert.Single(layout2.ExtraSplitApkPaths);
+
+        var logger2 = new ListLogger();
+        var args2 = new PatchArguments(
+            layout2.BaseApkPath,
+            "",
+            layout2.ExtraSplitApkPaths,
+            outDir2,
+            tempDir2,
+            repairedZip,
+            "",
+            null,
+            "com.example.splitnoarm64",
+            true);
+        Assert.True(new Patcher(args2, logger2).Run(), string.Join('\n', logger2.Lines));
+        var case2Report = ApkAnalyzer.Analyze(Path.Combine(outDir2, "base.apk"), Path.Combine(outDir2, "case2_assets.apk"));
+        Assert.True(case2Report.HasLibMain);
+        Assert.True(case2Report.HasMelonLoaderAssets);
+        AssertApkSigningBlockHasV2AndV3(Path.Combine(outDir2, "base.apk"));
+        AssertApkSigningBlockHasV2AndV3(Path.Combine(outDir2, "case2_assets.apk"));
+    }
+
     private static byte[] CompileCSharpAssembly(string assemblyName, string code, params MetadataReference[] extraRefs)
     {
         var refs = new List<MetadataReference>

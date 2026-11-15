@@ -18,24 +18,37 @@ namespace MelonLoader.Installer.Core.Repair;
 public static class LemonLoaderRepairer
 {
     public const string RepairedBundleFileName = "melon_data_repaired.zip";
-    private const string OfficialInstallerReleasesApi = "https://api.github.com/repos/mymes1/MelonLoaderInstaller/releases/latest";
+    private static readonly string[] OfficialInstallerReleasesApis =
+    [
+        "https://api.github.com/repos/mymes1/MelonLoaderforSonicDreamTeamAndroid/releases/latest",
+        "https://api.github.com/repos/mymes1/MelonLoaderInstaller/releases/latest"
+    ];
 
     public static string? FindLocalRepairedBundle()
     {
         string appDir = AppContext.BaseDirectory;
+        string cwd = Directory.GetCurrentDirectory();
         string appDataCache = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "MelonLoader.Installer.App",
             "Cache",
             RepairedBundleFileName);
 
-        string[] candidates =
+        List<string> candidates =
         [
             Path.Combine(appDir, "Resources", "repaired", RepairedBundleFileName),
             Path.Combine(appDir, "Resources", RepairedBundleFileName),
             Path.Combine(appDir, RepairedBundleFileName),
+            Path.Combine(cwd, "Resources", "repaired", RepairedBundleFileName),
+            Path.Combine(cwd, RepairedBundleFileName),
             appDataCache
         ];
+
+        if (OperatingSystem.IsAndroid())
+        {
+            candidates.Add(Path.Combine("/sdcard/Download", RepairedBundleFileName));
+            candidates.Add(Path.Combine("/sdcard/MelonLoader.Installer.App", RepairedBundleFileName));
+        }
 
         foreach (string candidate in candidates)
         {
@@ -75,32 +88,40 @@ public static class LemonLoaderRepairer
         client.DefaultRequestHeaders.UserAgent.ParseAdd("MelonLoaderInstaller/1.0");
         client.Timeout = TimeSpan.FromMinutes(5);
 
-        using var response = await client.GetAsync(OfficialInstallerReleasesApi);
-        if (!response.IsSuccessStatusCode)
-        {
-            throw new InvalidOperationException(
-                $"No local {RepairedBundleFileName} found and GitHub release lookup returned {(int)response.StatusCode}. " +
-                $"Place {RepairedBundleFileName} in Resources/repaired/ next to the application or build it via GitHub Actions.");
-        }
-
-        string json = await response.Content.ReadAsStringAsync();
-        using var doc = JsonDocument.Parse(json);
-        if (!doc.RootElement.TryGetProperty("assets", out var assets))
-            throw new InvalidOperationException("GitHub release metadata had no assets.");
-
         string? assetUrl = null;
-        foreach (var asset in assets.EnumerateArray())
+        int lastStatus = 0;
+        foreach (string apiUrl in OfficialInstallerReleasesApis)
         {
-            string? name = asset.TryGetProperty("name", out var n) ? n.GetString() : null;
-            if (name != null && name.Equals(RepairedBundleFileName, StringComparison.OrdinalIgnoreCase))
+            using var response = await client.GetAsync(apiUrl);
+            lastStatus = (int)response.StatusCode;
+            if (!response.IsSuccessStatusCode)
+                continue;
+
+            string json = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("assets", out var assets))
+                continue;
+
+            foreach (var asset in assets.EnumerateArray())
             {
-                assetUrl = asset.TryGetProperty("browser_download_url", out var u) ? u.GetString() : null;
-                break;
+                string? name = asset.TryGetProperty("name", out var n) ? n.GetString() : null;
+                if (name != null && name.Equals(RepairedBundleFileName, StringComparison.OrdinalIgnoreCase))
+                {
+                    assetUrl = asset.TryGetProperty("browser_download_url", out var u) ? u.GetString() : null;
+                    break;
+                }
             }
+
+            if (!string.IsNullOrEmpty(assetUrl))
+                break;
         }
 
         if (string.IsNullOrEmpty(assetUrl))
-            throw new InvalidOperationException($"GitHub release does not contain {RepairedBundleFileName}.");
+        {
+            throw new InvalidOperationException(
+                $"No local {RepairedBundleFileName} found and GitHub release lookup returned {lastStatus}. " +
+                $"Place {RepairedBundleFileName} in Resources/repaired/ next to the application or build it via GitHub Actions.");
+        }
 
         logger.Log($"Downloading [ {assetUrl} ]");
         byte[] bytes = await client.GetByteArrayAsync(assetUrl);

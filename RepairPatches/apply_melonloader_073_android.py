@@ -382,6 +382,8 @@ def patch_lemon070_jni_and_asset_manager(root: Path) -> None:
         "    {\n"
         "        unsafe\n"
         "        {\n"
+        "            if (obj == null || !obj.Valid() || methodID.Handle == IntPtr.Zero || Env == null)\n"
+        "                return new T() { Handle = IntPtr.Zero, ReferenceType = JNI.ReferenceType.Global };\n"
         "            fixed (JValue* v = args)\n"
         "            {\n"
         "                IntPtr res = Env->Functions->CallObjectMethodA(Env, obj.Handle, methodID, (IntPtr)v);\n"
@@ -394,11 +396,67 @@ def patch_lemon070_jni_and_asset_manager(root: Path) -> None:
         "    {\n"
         "        unsafe\n"
         "        {\n"
+        "            if (obj == null || !obj.Valid() || methodID.Handle == IntPtr.Zero || Env == null)\n"
+        "                return default!;\n"
         "            Type t = typeof(T);\n"
         "            fixed (JValue* v = args)\n"
         "            {\n"
         "                IntPtr argsPtr = (IntPtr)v;",
-        "JNI.cs CallObjectMethod + CallMethod fixed pin",
+        "JNI.cs CallObjectMethod + CallMethod fixed pin + null guards",
+    )
+    jni_text = replace_once(
+        jni_text,
+        "    public static JClass GetObjectClass(JObject obj)\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            IntPtr res = Env->Functions->GetObjectClass(Env, obj.Handle);\n\n"
+        "            using JClass local = new() { Handle = res, ReferenceType = JNI.ReferenceType.Local };\n"
+        "            return NewGlobalRef<JClass>(local);\n"
+        "        }\n"
+        "    }",
+        "    public static JClass GetObjectClass(JObject obj)\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            if (obj == null || !obj.Valid() || Env == null)\n"
+        "                return new JClass { Handle = IntPtr.Zero, ReferenceType = JNI.ReferenceType.Global };\n"
+        "            IntPtr res = Env->Functions->GetObjectClass(Env, obj.Handle);\n\n"
+        "            using JClass local = new() { Handle = res, ReferenceType = JNI.ReferenceType.Local };\n"
+        "            return NewGlobalRef<JClass>(local);\n"
+        "        }\n"
+        "    }",
+        "JNI.cs GetObjectClass null guard",
+    )
+    jni_text = replace_once(
+        jni_text,
+        "    public static JMethodID GetMethodID(JClass cls, string name, string sig)\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            IntPtr nameAnsi = Marshal.StringToHGlobalAnsi(name);\n"
+        "            IntPtr sigAnsi = Marshal.StringToHGlobalAnsi(sig);\n\n"
+        "            JMethodID id = Env->Functions->GetMethodID(Env, cls.Handle, nameAnsi, sigAnsi);\n\n"
+        "            Marshal.FreeHGlobal(nameAnsi);\n"
+        "            Marshal.FreeHGlobal(sigAnsi);\n"
+        "            return id;\n"
+        "        }\n"
+        "    }",
+        "    public static JMethodID GetMethodID(JClass cls, string name, string sig)\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            if (cls == null || !cls.Valid() || Env == null)\n"
+        "                return default;\n"
+        "            IntPtr nameAnsi = Marshal.StringToHGlobalAnsi(name);\n"
+        "            IntPtr sigAnsi = Marshal.StringToHGlobalAnsi(sig);\n\n"
+        "            JMethodID id = Env->Functions->GetMethodID(Env, cls.Handle, nameAnsi, sigAnsi);\n\n"
+        "            Marshal.FreeHGlobal(nameAnsi);\n"
+        "            Marshal.FreeHGlobal(sigAnsi);\n"
+        "            return id;\n"
+        "        }\n"
+        "    }",
+        "JNI.cs GetMethodID null guard",
     )
     jni_text = replace_once(
         jni_text,
@@ -439,6 +497,8 @@ def patch_lemon070_jni_and_asset_manager(root: Path) -> None:
         "    {\n"
         "        unsafe\n"
         "        {\n"
+        "            if (obj == null || !obj.Valid() || methodID.Handle == IntPtr.Zero || Env == null)\n"
+        "                return;\n"
         "            fixed (JValue* v = args)\n"
         "            {\n"
         "                Env->Functions->CallVoidMethodA(Env, obj.Handle, methodID, (IntPtr)v);\n"
@@ -528,6 +588,8 @@ def patch_lemon070_jni_and_asset_manager(root: Path) -> None:
         "    {\n"
         "        unsafe\n"
         "        {\n"
+        "            if (cls == null || !cls.Valid() || Env == null)\n"
+        "                return default;\n"
         "            IntPtr nameAnsi = Marshal.StringToHGlobalAnsi(name);\n"
         "            IntPtr sigAnsi = Marshal.StringToHGlobalAnsi(sig);\n"
         "            JMethodID id = Env->Functions->GetStaticMethodID(Env, cls.Handle, nameAnsi, sigAnsi);\n"
@@ -540,6 +602,8 @@ def patch_lemon070_jni_and_asset_manager(root: Path) -> None:
         "    {\n"
         "        unsafe\n"
         "        {\n"
+        "            if (cls == null || !cls.Valid() || methodID.Handle == IntPtr.Zero || Env == null)\n"
+        "                return new T() { Handle = IntPtr.Zero, ReferenceType = JNI.ReferenceType.Global };\n"
         "            fixed (JValue* v = args)\n"
         "            {\n"
         "                IntPtr res = Env->Functions->CallStaticObjectMethodA(Env, cls.Handle, methodID.Handle, (IntPtr)v);\n"
@@ -550,11 +614,16 @@ def patch_lemon070_jni_and_asset_manager(root: Path) -> None:
         "    }\n\n"
         "    public static T CallStaticMethod<T>(JClass cls, JMethodID methodID, params JValue[] args)\n"
         "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            if (cls == null || !cls.Valid() || methodID.Handle == IntPtr.Zero || Env == null)\n"
+        "                return default!;\n"
+        "        }\n"
         "        Type t = typeof(T);\n"
         "        fixed (JValue* v = args)\n"
         "        {\n"
         "            IntPtr argsPtr = (IntPtr)v;",
-        "JNI.cs GetStaticMethodID FreeHGlobal + CallStatic* fixed pin",
+        "JNI.cs GetStaticMethodID FreeHGlobal + CallStatic* fixed pin + null guards",
     )
     jni_text = replace_once(
         jni_text,
@@ -581,6 +650,8 @@ def patch_lemon070_jni_and_asset_manager(root: Path) -> None:
         "    {\n"
         "        unsafe\n"
         "        {\n"
+        "            if (cls == null || !cls.Valid() || methodID.Handle == IntPtr.Zero || Env == null)\n"
+        "                return;\n"
         "            fixed (JValue* v = args)\n"
         "            {\n"
         "                Env->Functions->CallStaticVoidMethodA(Env, cls.Handle, methodID, (IntPtr)v);\n"
@@ -591,14 +662,186 @@ def patch_lemon070_jni_and_asset_manager(root: Path) -> None:
     )
     jni_text = replace_once(
         jni_text,
+        "            if (!str.Valid())\n"
+        "                return \"\";\n\n"
         "            IntPtr res = Env->Functions->GetStringUTFChars(Env, str.Handle, out byte isCopy);\n"
         "            string? resultString = Marshal.PtrToStringAuto(res);\n"
         "            Env->Functions->ReleaseStringChars(Env, str.Handle, res);",
+        "            if (str == null || !str.Valid() || Env == null)\n"
+        "                return \"\";\n\n"
         "            IntPtr res = Env->Functions->GetStringUTFChars(Env, str.Handle, out byte isCopy);\n"
         "            string? resultString = res != IntPtr.Zero ? Marshal.PtrToStringUTF8(res) : null;\n"
         "            if (res != IntPtr.Zero)\n"
         "                Env->Functions->ReleaseStringUTFChars(Env, str.Handle, res);",
-        "JNI.cs GetJStringString ReleaseStringUTFChars + PtrToStringUTF8",
+        "JNI.cs GetJStringString ReleaseStringUTFChars + PtrToStringUTF8 + null guard",
+    )
+    jni_text = replace_once(
+        jni_text,
+        "    public static JFieldID GetStaticFieldID(JClass cls, string name, string sig)\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            IntPtr nameAnsi = Marshal.StringToHGlobalAnsi(name);\n"
+        "            IntPtr sigAnsi = Marshal.StringToHGlobalAnsi(sig);\n\n"
+        "            JFieldID id = Env->Functions->GetStaticFieldID(Env, cls.Handle, nameAnsi, sigAnsi);\n\n"
+        "            Marshal.FreeHGlobal(nameAnsi);\n"
+        "            Marshal.FreeHGlobal(sigAnsi);\n"
+        "            return id;\n"
+        "        }\n"
+        "    }\n\n"
+        "    public static T GetStaticObjectField<T>(JClass cls, JFieldID fieldID) where T : JObject, new()\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            IntPtr res = Env->Functions->GetStaticObjectField(Env, cls.Handle, fieldID);\n\n"
+        "            using JObject local = new() { Handle = res, ReferenceType = JNI.ReferenceType.Local };\n"
+        "            return NewGlobalRef<T>(local);\n"
+        "        }\n"
+        "    }",
+        "    public static JFieldID GetStaticFieldID(JClass cls, string name, string sig)\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            if (cls == null || !cls.Valid() || Env == null)\n"
+        "                return default;\n"
+        "            IntPtr nameAnsi = Marshal.StringToHGlobalAnsi(name);\n"
+        "            IntPtr sigAnsi = Marshal.StringToHGlobalAnsi(sig);\n\n"
+        "            JFieldID id = Env->Functions->GetStaticFieldID(Env, cls.Handle, nameAnsi, sigAnsi);\n\n"
+        "            Marshal.FreeHGlobal(nameAnsi);\n"
+        "            Marshal.FreeHGlobal(sigAnsi);\n"
+        "            return id;\n"
+        "        }\n"
+        "    }\n\n"
+        "    public static T GetStaticObjectField<T>(JClass cls, JFieldID fieldID) where T : JObject, new()\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            if (cls == null || !cls.Valid() || fieldID.Handle == IntPtr.Zero || Env == null)\n"
+        "                return new T() { Handle = IntPtr.Zero, ReferenceType = JNI.ReferenceType.Global };\n"
+        "            IntPtr res = Env->Functions->GetStaticObjectField(Env, cls.Handle, fieldID);\n\n"
+        "            using JObject local = new() { Handle = res, ReferenceType = JNI.ReferenceType.Local };\n"
+        "            return NewGlobalRef<T>(local);\n"
+        "        }\n"
+        "    }",
+        "JNI.cs GetStaticFieldID + GetStaticObjectField null guards",
+    )
+    jni_text = replace_once(
+        jni_text,
+        "    public static JFieldID GetFieldID(JClass cls, string name, string sig)\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            IntPtr nameAnsi = Marshal.StringToHGlobalAnsi(name);\n"
+        "            IntPtr sigAnsi = Marshal.StringToHGlobalAnsi(sig);\n\n"
+        "            JFieldID id = Env->Functions->GetFieldID(Env, cls.Handle, nameAnsi, sigAnsi);\n\n"
+        "            Marshal.FreeHGlobal(nameAnsi);\n"
+        "            Marshal.FreeHGlobal(sigAnsi);\n"
+        "            return id;\n"
+        "        }\n"
+        "    }\n\n"
+        "    public static T GetObjectField<T>(JObject obj, JFieldID fieldID) where T : JObject, new()\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            IntPtr res = Env->Functions->GetObjectField(Env, obj.Handle, fieldID);\n"
+        "            using JObject local = new() { Handle = res, ReferenceType = JNI.ReferenceType.Local };\n"
+        "            return NewGlobalRef<T>(local);\n"
+        "        }\n"
+        "    }",
+        "    public static JFieldID GetFieldID(JClass cls, string name, string sig)\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            if (cls == null || !cls.Valid() || Env == null)\n"
+        "                return default;\n"
+        "            IntPtr nameAnsi = Marshal.StringToHGlobalAnsi(name);\n"
+        "            IntPtr sigAnsi = Marshal.StringToHGlobalAnsi(sig);\n\n"
+        "            JFieldID id = Env->Functions->GetFieldID(Env, cls.Handle, nameAnsi, sigAnsi);\n\n"
+        "            Marshal.FreeHGlobal(nameAnsi);\n"
+        "            Marshal.FreeHGlobal(sigAnsi);\n"
+        "            return id;\n"
+        "        }\n"
+        "    }\n\n"
+        "    public static T GetObjectField<T>(JObject obj, JFieldID fieldID) where T : JObject, new()\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            if (obj == null || !obj.Valid() || fieldID.Handle == IntPtr.Zero || Env == null)\n"
+        "                return new T() { Handle = IntPtr.Zero, ReferenceType = JNI.ReferenceType.Global };\n"
+        "            IntPtr res = Env->Functions->GetObjectField(Env, obj.Handle, fieldID);\n"
+        "            using JObject local = new() { Handle = res, ReferenceType = JNI.ReferenceType.Local };\n"
+        "            return NewGlobalRef<T>(local);\n"
+        "        }\n"
+        "    }",
+        "JNI.cs GetFieldID + GetObjectField null guards",
+    )
+    jni_text = replace_once(
+        jni_text,
+        "    public static JString NewString(string str)\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            IntPtr strUni = Marshal.StringToHGlobalUni(str);\n\n"
+        "            IntPtr res = Env->Functions->NewString(Env, strUni, str.Length);\n\n"
+        "            Marshal.FreeHGlobal(strUni);\n\n"
+        "            using JObject local = new() { Handle = res, ReferenceType = JNI.ReferenceType.Local };\n"
+        "            return NewGlobalRef<JString>(local);\n"
+        "        }\n"
+        "    }",
+        "    public static JString NewString(string str)\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            if (str == null || Env == null)\n"
+        "                return new JString { Handle = IntPtr.Zero, ReferenceType = JNI.ReferenceType.Global };\n"
+        "            IntPtr strUni = Marshal.StringToHGlobalUni(str);\n\n"
+        "            IntPtr res = Env->Functions->NewString(Env, strUni, str.Length);\n\n"
+        "            Marshal.FreeHGlobal(strUni);\n\n"
+        "            using JObject local = new() { Handle = res, ReferenceType = JNI.ReferenceType.Local };\n"
+        "            return NewGlobalRef<JString>(local);\n"
+        "        }\n"
+        "    }",
+        "JNI.cs NewString null guard",
+    )
+    jni_text = replace_once(
+        jni_text,
+        "    public static int GetArrayLength<T>(JObjectArray<T> jarray) where T : JObject, new()\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            return Env->Functions->GetArrayLength(Env, jarray.Handle);\n"
+        "        }\n"
+        "    }\n\n"
+        "    public static T GetObjectArrayElement<T>(JObjectArray<T> array, int index) where T : JObject, new()\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            IntPtr res = Env->Functions->GetObjectArrayElement(Env, array.Handle, index);\n\n"
+        "            using JObject local = new() { Handle = res, ReferenceType = JNI.ReferenceType.Local };\n"
+        "            return NewGlobalRef<T>(local);\n"
+        "        }\n"
+        "    }",
+        "    public static int GetArrayLength<T>(JObjectArray<T> jarray) where T : JObject, new()\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            if (jarray == null || !jarray.Valid() || Env == null)\n"
+        "                return 0;\n"
+        "            return Env->Functions->GetArrayLength(Env, jarray.Handle);\n"
+        "        }\n"
+        "    }\n\n"
+        "    public static T GetObjectArrayElement<T>(JObjectArray<T> array, int index) where T : JObject, new()\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            if (array == null || !array.Valid() || Env == null || index < 0)\n"
+        "                return new T() { Handle = IntPtr.Zero, ReferenceType = JNI.ReferenceType.Global };\n"
+        "            IntPtr res = Env->Functions->GetObjectArrayElement(Env, array.Handle, index);\n\n"
+        "            using JObject local = new() { Handle = res, ReferenceType = JNI.ReferenceType.Local };\n"
+        "            return NewGlobalRef<T>(local);\n"
+        "        }\n"
+        "    }",
+        "JNI.cs GetArrayLength + GetObjectArrayElement null guards",
     )
     jni_text = replace_once(
         jni_text,
@@ -2105,16 +2348,28 @@ public static class AndroidBootstrap
     {
         var baseDataDir = DataDir;
         var melonloaderFolder = Path.Combine(baseDataDir, "MelonLoader");
+        var melonMarker = Path.Combine(melonloaderFolder, ".lemon_copied");
+        var melonSentinel = Path.Combine(melonloaderFolder, "net6", "MelonLoader.dll");
         var baseInternalFolder = $"/data/data/{PackageName}/";
         var dotnetFolder = $"/data/data/{PackageName}/dotnet";
+        var dotnetMarker = Path.Combine(dotnetFolder, ".lemon_copied");
+        var dotnetSentinel = Path.Combine(dotnetFolder, "shared", "Microsoft.NETCore.App", "8.0.6", "libcoreclr.so");
+        string stamp = date == default ? "0" : date.UtcDateTime.ToString("O");
 
         try
         {
             Directory.CreateDirectory(baseDataDir);
-            if (!Directory.Exists(melonloaderFolder) || Directory.GetLastWriteTimeUtc(melonloaderFolder) <= date)
+            bool melonUpToDate = Directory.Exists(melonloaderFolder)
+                && File.Exists(melonSentinel)
+                && File.Exists(melonMarker)
+                && File.ReadAllText(melonMarker).Trim() == stamp
+                && Directory.GetLastWriteTimeUtc(melonloaderFolder) > date;
+
+            if (!melonUpToDate)
             {
                 EarlyLog.Checkpoint("assets_copy", $"Copying assets/MelonLoader -> {baseDataDir}");
                 APKAssetManager.SaveItemToDirectory("MelonLoader", baseDataDir, true);
+                File.WriteAllText(melonMarker, stamp);
             }
             else
             {
@@ -2128,10 +2383,17 @@ public static class AndroidBootstrap
 
         try
         {
-            if (!Directory.Exists(dotnetFolder) || Directory.GetLastWriteTimeUtc(dotnetFolder) <= date)
+            bool dotnetUpToDate = Directory.Exists(dotnetFolder)
+                && File.Exists(dotnetSentinel)
+                && File.Exists(dotnetMarker)
+                && File.ReadAllText(dotnetMarker).Trim() == stamp
+                && Directory.GetLastWriteTimeUtc(dotnetFolder) > date;
+
+            if (!dotnetUpToDate)
             {
                 EarlyLog.Checkpoint("assets_copy", $"Copying assets/dotnet -> {baseInternalFolder}");
                 APKAssetManager.SaveItemToDirectory("dotnet", baseInternalFolder, true);
+                File.WriteAllText(dotnetMarker, stamp);
             }
             else
             {
@@ -2345,6 +2607,18 @@ internal delegate nint GetJavaVMFn();
         "#if LINUX || OSX\n            PltHook.InstallHooks\n            ([\n                (\"dlsym\", detourPtr)\n            ]);\n#endif",
         "#if LINUX || OSX || ANDROID\n            PltHook.InstallHooks\n            ([\n                (\"dlsym\", detourPtr)\n            ]);\n#endif",
         "ModuleSymbolRedirect.cs Attach ANDROID",
+    )
+    msr_text = replace_once(
+        msr_text,
+        "        internal static nint GetSymbol(nint handle, string symbolName)\n"
+        "            => GetSymbol(handle, Marshal.StringToHGlobalAnsi(symbolName));",
+        "        internal static nint GetSymbol(nint handle, string symbolName)\n"
+        "        {\n"
+        "            nint symPtr = Marshal.StringToHGlobalAnsi(symbolName);\n"
+        "            try { return GetSymbol(handle, symPtr); }\n"
+        "            finally { Marshal.FreeHGlobal(symPtr); }\n"
+        "        }",
+        "ModuleSymbolRedirect.cs GetSymbol FreeHGlobal",
     )
     msr_text = replace_once(
         msr_text,
@@ -3578,6 +3852,18 @@ namespace MelonLoader.Il2CppAssemblyGenerator.Packages
 
             Cpp2IlPluginManager.CallOnFinish();
             try { if (File.Exists(runtimeArgs.PathToMetadata)) File.Delete(runtimeArgs.PathToMetadata); } catch { }
+            try
+            {
+                typeof(Cpp2IlApi).GetProperty("CurrentAppContext")?.SetValue(null, null);
+                var libMain = typeof(LibCpp2IL.LibCpp2IlMain);
+                libMain.GetField("TheMetadata")?.SetValue(null, null);
+                libMain.GetField("Binary")?.SetValue(null, null);
+                libMain.GetMethod("Reset")?.Invoke(null, null);
+            }
+            catch { }
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
 
             Core.Logger.Msg($"Cpp2IL Done in {(DateTime.Now - executionStart).TotalMilliseconds:F0}ms");
             return true;
@@ -3587,6 +3873,24 @@ namespace MelonLoader.Il2CppAssemblyGenerator.Packages
 #endif
 """
     write_utf8(cpp2il_cs_path, android_cpp2il)
+
+    # Patch Packages/Il2CppInterop.cs: disable Parallel on Android to reduce peak RSS on 4 GB devices and dispose input assemblies
+    interop_cs_path = ag_dir / "Packages/Il2CppInterop.cs"
+    if interop_cs_path.exists():
+        interop_text = interop_cs_path.read_text(encoding="utf-8")
+        interop_text = replace_once(
+            interop_text,
+            "                Parallel = true,",
+            "#if ANDROID\n                Parallel = false,\n#else\n                Parallel = true,\n#endif",
+            "Il2CppInterop.cs Parallel=false on Android",
+        )
+        interop_text = replace_once(
+            interop_text,
+            "            //inputAssemblies.ForEach(a => a.Dispose());",
+            "#if ANDROID\n            try\n            {\n                foreach (var a in inputAssemblies) a.ManifestModule?.Dispose();\n                resolver.Dispose();\n                inputAssemblies.Clear();\n                GC.Collect();\n                GC.WaitForPendingFinalizers();\n                GC.Collect();\n            }\n            catch { }\n#endif",
+            "Il2CppInterop.cs Android cleanup + GC",
+        )
+        write_utf8(interop_cs_path, interop_text)
 
     # Isolate External/Cpp2IL from MelonLoader's root Directory.Build.props when present
     ext_cpp2il_dir = root / "External/Cpp2IL"

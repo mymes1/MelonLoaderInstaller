@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using System.Linq;
 
 namespace MelonLoader.Installer.Core;
@@ -29,9 +29,9 @@ public class PatchInfo
         UnityNativeDirectory = Path.Combine(arguments.TempDirectory, "unity");
 
         OutputBaseApkPath = Path.Combine(arguments.OutputApkDirectory, "base.apk");
-        if (_arguments.IsSplit)
+        if (_arguments.IsSplit && !string.IsNullOrWhiteSpace(_arguments.LibraryApkPath))
             OutputLibApkPath = Path.Combine(arguments.OutputApkDirectory, Path.GetFileName(arguments.LibraryApkPath));
-        if (_arguments.ExtraSplitApkPaths != null)
+        if (_arguments.ExtraSplitApkPaths != null && _arguments.ExtraSplitApkPaths.Length > 0)
             OutputExtraApkPaths = _arguments.ExtraSplitApkPaths.Select(p => Path.Combine(arguments.OutputApkDirectory, Path.GetFileName(p))).ToArray();
     }
 

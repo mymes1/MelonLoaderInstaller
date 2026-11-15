@@ -640,24 +640,16 @@ public static class PatchRunner
     {
         _logger?.Log("Starting patching core");
 
-        string targetApkPath;
-        string libraryApkPath;
-        string[] extraSplits;
+        IEnumerable<string> inputPaths = data.Source == UnityApplicationFinder.Source.ADB
+            ? data.APKPaths.Select(p => Path.Combine(_apkOutputPath, Path.GetFileName(p)))
+            : data.APKPaths;
 
-        if (data.Source is UnityApplicationFinder.Source.PackageManager or UnityApplicationFinder.Source.File)
-        {
-            targetApkPath = data.APKPaths.First();
-            libraryApkPath = data.APKPaths.FirstOrDefault(p => p.Contains("arm64")) ?? "";
-            extraSplits = data.APKPaths.Skip(1).Where(p => !p.Contains("arm64")).ToArray();
-        }
-        else
-        {
-            string? arm64Split = data.APKPaths.FirstOrDefault(p => p.Contains("arm64"));
+        var layout = SplitApkBundleExtractor.ResolveApkLayout(inputPaths);
+        string targetApkPath = layout.BaseApkPath;
+        string libraryApkPath = layout.Arm64SplitApkPath ?? "";
+        string[] extraSplits = layout.ExtraSplitApkPaths;
 
-            targetApkPath = Path.Combine(_apkOutputPath, Path.GetFileName(data.APKPaths.First()));
-            libraryApkPath = arm64Split == null ? "" : Path.Combine(_apkOutputPath, Path.GetFileName(arm64Split));
-            extraSplits = data.APKPaths.Skip(1).Where(p => !p.Contains("arm64")).Select(p => Path.Combine(_apkOutputPath, Path.GetFileName(p))).ToArray();
-        }
+        _logger?.Log($"Resolved APK layout: base={Path.GetFileName(targetApkPath)}, arm64Split={(string.IsNullOrEmpty(libraryApkPath) ? "(none - in base)" : Path.GetFileName(libraryApkPath))}, extraSplits={extraSplits.Length}");
 
         PatchArguments arguments = new(
             targetApkPath,
@@ -669,7 +661,7 @@ public static class PatchRunner
             _unityDepsPath,
             _unityVersion,
             data.PackageName,
-            data.APKPaths.Length > 1,
+            layout.AllApkPaths.Length > 1,
             replaceLibUnity: ReplaceLibUnity,
             patchStage: ActivePatchStage);
         Patcher patcher = new(arguments, _logger!);

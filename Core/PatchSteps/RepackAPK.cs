@@ -55,7 +55,7 @@ internal class RepackAPK : IPatchStep
         bool isSingleMainNativeAot = !File.Exists(Path.Combine(nativeDir, "libBootstrap.so"));
 
         // libs data
-        if (!patcher.Args.IsSplit)
+        if (string.IsNullOrEmpty(patcher.Info.OutputLibApkPath))
         {
             if (isSingleMainNativeAot)
             {
@@ -70,7 +70,7 @@ internal class RepackAPK : IPatchStep
         }
         else
         {
-            using FileStream libStream = File.Open(patcher.Info.OutputLibApkPath!, FileMode.Open);
+            using FileStream libStream = File.Open(patcher.Info.OutputLibApkPath, FileMode.Open);
             using ZipArchive libArchive = new(libStream, ZipArchiveMode.Read | ZipArchiveMode.Update);
 
             if (isSingleMainNativeAot)

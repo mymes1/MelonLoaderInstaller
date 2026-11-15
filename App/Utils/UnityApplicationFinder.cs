@@ -1,4 +1,4 @@
-﻿using System.Reflection;
+using System.Reflection;
 
 #if ANDROID
 using Android.Content.PM;
@@ -110,10 +110,27 @@ namespace MelonLoader.Installer.App.Utils
             Status status = Status.Unpatched;
             if (!info.NativeLibraryDir?.Contains("arm64") ?? true)
                 status = Status.Unsupported;
-            if (libs.Any(f => f.Contains("libBootstrap.so")) && libs.Any(f => f.Contains("libdobby.so")))
+            if ((libs.Any(f => f.Contains("libBootstrap.so")) && libs.Any(f => f.Contains("libdobby.so")))
+                || (libs.Any(f => f.Contains("libmain.so")) && HasMelonLoaderAssets(info.PublicSourceDir)))
                 status = Status.Patched;
 
             return status;
+        }
+
+        private static bool HasMelonLoaderAssets(string? apkPath)
+        {
+            if (string.IsNullOrEmpty(apkPath) || !File.Exists(apkPath))
+                return false;
+            try
+            {
+                using var fs = File.OpenRead(apkPath);
+                using var zip = new System.IO.Compression.ZipArchive(fs, System.IO.Compression.ZipArchiveMode.Read);
+                return zip.Entries.Any(e => e.FullName.StartsWith("assets/MelonLoader/", StringComparison.OrdinalIgnoreCase));
+            }
+            catch
+            {
+                return false;
+            }
         }
 #endif
         public class Data : BindableObject

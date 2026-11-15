@@ -1,4 +1,4 @@
-﻿using MelonLoader.Installer.Core.Utilities.Signing;
+using MelonLoader.Installer.Core.Utilities.Signing;
 using System;
 using System.IO;
 
@@ -17,7 +17,7 @@ internal class AlignSign : IPatchStep
         _pemData = patcher.Info.PemData;
 
         bool sign = Sign(patcher.Info.OutputBaseApkPath);
-        if (patcher.Args.IsSplit)
+        if (!string.IsNullOrEmpty(patcher.Info.OutputLibApkPath))
             sign = sign && Sign(patcher.Info.OutputLibApkPath);
 
         if (patcher.Info.OutputExtraApkPaths != null)
