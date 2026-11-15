@@ -1686,6 +1686,12 @@ def patch_managed_melonloader(root: Path) -> None:
         "#endif",
         "LoaderConfig.cs Android DataDir",
     )
+    lc_text = replace_once(
+        lc_text,
+        "        private const string MonoPathSeparatorDescription =\n#if WINDOWS\n            \"semicolon (;)\";\n#elif LINUX || OSX\n            \"colon (:)\";\n#endif",
+        "        private const string MonoPathSeparatorDescription =\n#if WINDOWS\n            \"semicolon (;)\";\n#elif LINUX || OSX || ANDROID\n            \"colon (:)\";\n#endif",
+        "LoaderConfig.cs MonoPathSeparatorDescription Android",
+    )
     write_utf8(lc_path, lc_text)
 
     # 3. InternalUtils/BootstrapLibrary.cs
