@@ -26,7 +26,7 @@ internal class RepackAPK : IPatchStep
             {
                 ZipArchiveEntry dex = dexEntries[i];
                 string path = Path.Combine(patcher.Args.TempDirectory, dex.Name);
-                dex.ExtractToFile(path);
+                dex.ExtractToFile(path, overwrite: true);
                 byte[] dexData = File.ReadAllBytes(path);
 
                 dex.Delete();

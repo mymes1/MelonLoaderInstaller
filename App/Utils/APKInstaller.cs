@@ -1,4 +1,4 @@
-﻿#if ANDROID
+#if ANDROID
 using Android.App;
 using Android.Content;
 using Android.Content.PM;
@@ -110,7 +110,10 @@ public class APKInstaller
         }
 #else
         if (apks.Length > 1)
-            await ADBManager.InstallMultipleAPKs(apks.First(a => a.EndsWith("base.apk")), apks.Where(a => !a.EndsWith("base.apk")).ToArray());
+        {
+            string baseApk = apks.FirstOrDefault(a => Path.GetFileName(a).Equals("base.apk", StringComparison.OrdinalIgnoreCase)) ?? apks[0];
+            await ADBManager.InstallMultipleAPKs(baseApk, apks.Where(a => a != baseApk).ToArray());
+        }
         else
             await ADBManager.InstallAPK(apks[0]);
 #endif

@@ -1,4 +1,4 @@
-﻿using System.IO.Compression;
+using System.IO.Compression;
 using System.IO;
 
 namespace MelonLoader.Installer.Core.PatchSteps;
@@ -13,7 +13,7 @@ internal class ExtractUnityLibs : IPatchStep
 
         using FileStream zipStream = new(patcher.Args.UnityDependenciesPath, FileMode.Open);
         using ZipArchive archive = new(zipStream, ZipArchiveMode.Read);
-        archive.ExtractToDirectory(patcher.Info.UnityNativeDirectory);
+        archive.ExtractToDirectory(patcher.Info.UnityNativeDirectory, overwriteFiles: true);
 
         // handle unstripped dependencies from udgb
         string libsSubDir = Path.Combine(patcher.Info.UnityNativeDirectory, "Libs");

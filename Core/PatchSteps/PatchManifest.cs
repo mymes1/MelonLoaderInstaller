@@ -47,7 +47,7 @@ internal class PatchManifest : IPatchStep
         using FileStream zipStream = new(apkPath, FileMode.Open);
         using ZipArchive archive = new(zipStream, ZipArchiveMode.Read | ZipArchiveMode.Update);
 
-        ZipArchiveEntry manifestEntry = archive.Entries.First(a => a.Name == "AndroidManifest.xml");
+        ZipArchiveEntry manifestEntry = archive.Entries.First(a => a.FullName == "AndroidManifest.xml");
         using Stream manifestStream = manifestEntry.Open();
         using MemoryStream memoryStream = new();
 

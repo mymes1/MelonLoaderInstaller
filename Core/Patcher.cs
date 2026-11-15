@@ -1,4 +1,4 @@
-﻿using MelonLoader.Installer.Core.PatchSteps;
+using MelonLoader.Installer.Core.PatchSteps;
 using System;
 using System.IO;
 
@@ -21,16 +21,13 @@ public class Patcher(PatchArguments arguments, IPatchLogger logger)
         {
             Info.CreateDirectories();
 
-            if (!Path.Exists(Info.OutputBaseApkPath))
-            {
-                Logger.Log($"Copying [ {Args.TargetApkPath} ] to [ {Info.OutputBaseApkPath} ]");
-                File.Copy(Args.TargetApkPath, Info.OutputBaseApkPath);
-            }
+            Logger.Log($"Copying [ {Args.TargetApkPath} ] to [ {Info.OutputBaseApkPath} ]");
+            File.Copy(Args.TargetApkPath, Info.OutputBaseApkPath, overwrite: true);
 
-            if (Args.IsSplit && !Path.Exists(Info.OutputLibApkPath))
+            if (Args.IsSplit)
             {
                 Logger.Log($"Copying [ {Args.LibraryApkPath} ] to [ {Info.OutputLibApkPath} ]");
-                File.Copy(Args.LibraryApkPath, Info.OutputLibApkPath!);
+                File.Copy(Args.LibraryApkPath!, Info.OutputLibApkPath!, overwrite: true);
             }
 
             if (Args.ExtraSplitApkPaths != null)
@@ -40,11 +37,8 @@ public class Patcher(PatchArguments arguments, IPatchLogger logger)
                     string from = Args.ExtraSplitApkPaths[i];
                     string to = Info.OutputExtraApkPaths![i];
 
-                    if (!File.Exists(to))
-                    {
-                        Logger.Log($"Copying [ {from} ] to [ {to} ]");
-                        File.Copy(from, to);
-                    }
+                    Logger.Log($"Copying [ {from} ] to [ {to} ]");
+                    File.Copy(from, to, overwrite: true);
                 }
             }
 

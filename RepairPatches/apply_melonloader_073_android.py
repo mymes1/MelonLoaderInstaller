@@ -49,16 +49,63 @@ def copy_lemon070_android_files(root: Path, lemon_070: Path) -> None:
     for lib in ("libdobby.a", "libplthook.a"):
         shutil.copy2(deps_src / lib, deps_dst / lib)
 
-    # 3. ClrMonoLib.cs
-    shutil.copy2(
-        lemon_070 / "MelonLoader.Bootstrap/RuntimeHandlers/Il2Cpp/ClrMonoLib.cs",
-        root / "MelonLoader.Bootstrap/RuntimeHandlers/Il2Cpp/ClrMonoLib.cs",
+    # 3. ClrMonoLib.cs (patched with explicit Cdecl calling conventions + runtime version fallback)
+    clr_mono_dst = root / "MelonLoader.Bootstrap/RuntimeHandlers/Il2Cpp/ClrMonoLib.cs"
+    clr_mono_text = (lemon_070 / "MelonLoader.Bootstrap/RuntimeHandlers/Il2Cpp/ClrMonoLib.cs").read_text(encoding="utf-8")
+    clr_mono_text = clr_mono_text.replace(
+        "public delegate bool CheckThreadDelegate(ulong threadId);",
+        "[UnmanagedFunctionPointer(CallingConvention.Cdecl)]\n"
+        "    [return: MarshalAs(UnmanagedType.U1)]\n"
+        "    public delegate bool CheckThreadDelegate(ulong threadId);",
     )
+    clr_mono_text = clr_mono_text.replace(
+        "public delegate void MonoUnhandledExceptionDelegate(IntPtr exc, IntPtr userData);",
+        "[UnmanagedFunctionPointer(CallingConvention.Cdecl)]\n"
+        "    public delegate void MonoUnhandledExceptionDelegate(IntPtr exc, IntPtr userData);",
+    )
+    clr_mono_text = replace_once(
+        clr_mono_text,
+        "        if (!NativeLibrary.TryLoad(Path.Combine(AndroidBootstrap.DotnetDir, \"shared\", \"Microsoft.NETCore.App\", \"8.0.6\", \"libcoreclr.so\"), out var hRuntime)",
+        "        string sharedRoot = Path.Combine(AndroidBootstrap.DotnetDir, \"shared\", \"Microsoft.NETCore.App\");\n"
+        "        string libPath = Path.Combine(sharedRoot, \"8.0.6\", \"libcoreclr.so\");\n"
+        "        if (!File.Exists(libPath) && Directory.Exists(sharedRoot))\n"
+        "        {\n"
+        "            libPath = Directory.GetDirectories(sharedRoot)\n"
+        "                .Select(d => Path.Combine(d, \"libcoreclr.so\"))\n"
+        "                .FirstOrDefault(File.Exists) ?? libPath;\n"
+        "        }\n\n"
+        "        if (!NativeLibrary.TryLoad(libPath, out var hRuntime)",
+        "ClrMonoLib.cs dynamic libcoreclr.so path",
+    )
+    write_utf8(clr_mono_dst, clr_mono_text)
 
     print("[copied] LemonLoader 0.7.0 JNI, APKAssetManager, linux-bionic-arm64 deps, and ClrMonoLib")
 
 
 def patch_lemon070_jni_and_asset_manager(root: Path) -> None:
+    # Fix 0: JavaVM.cs AttachCurrentThread arg 3 was `ref IntPtr` (passing &refPtr = non-null bogus
+    # JavaVMAttachArgs* with version=0!), causing ART to return JNI_EVERSION (-3) and leave env=null!
+    jvm_path = root / "MelonLoader/JNI/JavaVM.cs"
+    jvm_text = jvm_path.read_text(encoding="utf-8")
+    jvm_text = replace_once(
+        jvm_text,
+        "        internal readonly delegate* unmanaged[Stdcall]<JavaVM*, out JNIEnv*, ref IntPtr, JNI.Result> AttachCurrentThread;",
+        "        internal readonly delegate* unmanaged[Stdcall]<JavaVM*, out JNIEnv*, IntPtr, JNI.Result> AttachCurrentThread;",
+        "JavaVM.cs fix AttachCurrentThread args pointer signature",
+    )
+    write_utf8(jvm_path, jvm_text)
+
+    # Fix 0b: JValue.cs guard null JObject
+    jval_path = root / "MelonLoader/JNI/JValue.cs"
+    jval_text = jval_path.read_text(encoding="utf-8")
+    jval_text = replace_once(
+        jval_text,
+        "    public JValue(JObject obj)\n    {\n        this = new JValue();\n        this.L = obj.Handle;\n    }",
+        "    public JValue(JObject? obj)\n    {\n        this = new JValue();\n        this.L = obj?.Handle ?? IntPtr.Zero;\n    }",
+        "JValue.cs guard null JObject",
+    )
+    write_utf8(jval_path, jval_text)
+
     # Fix 1: JObject.cs must NEVER call DeleteLocalRef from the GC Finalizer thread (!disposing),
     # because ART JNI aborts if another thread deletes a thread-local reference.
     jobj_path = root / "MelonLoader/JNI/JObject.cs"
@@ -76,11 +123,22 @@ def patch_lemon070_jni_and_asset_manager(root: Path) -> None:
     )
     write_utf8(jobj_path, jobj_text)
 
-    # Fix 2: JNI.FindClass must lock ClassCache, never cache failed lookups (IntPtr.Zero),
-    # and return a fresh LocalRef instead of the cached GlobalRef so `using JClass` never
-    # deletes the cached GlobalRef out from under ClassCache!
+    # Fix 2: JNI.cs
+    # - Fix Initialize: pass IntPtr.Zero (NULL) to AttachCurrentThread, use AttachCurrentThreadAsDaemon
+    #   on background/finalizer threads, and check Result == 0
+    # - Guard Env == null in DeleteGlobalRef/DeleteWeakGlobalRef/DeleteLocalRef/NewGlobalRef/NewLocalRef/ExceptionCheck/ExceptionClear
+    # - Fix FindClass thread-safety + return LocalRef
+    # - Fix GetJStringString (ReleaseStringUTFChars + PtrToStringUTF8)
+    # - Fix GetStaticMethodID HGlobal leak, NewObject Console.WriteLine + local ref leak, NewArray long/float/double
+    # - Pin args arrays with `fixed (JValue* argsPtr = args)` instead of unpinned UnsafeAddrOfPinnedArrayElement
     jni_path = root / "MelonLoader/JNI/JNI.cs"
     jni_text = jni_path.read_text(encoding="utf-8")
+    jni_text = replace_once(
+        jni_text,
+        "using System.Collections.Generic;\nusing System.Linq;\nusing System.Runtime.InteropServices;",
+        "using System.Collections.Generic;\nusing System.Linq;\nusing System.Runtime.InteropServices;\nusing System.Threading;",
+        "JNI.cs using System.Threading",
+    )
     jni_text = replace_once(
         jni_text,
         "    public static void Initialize(IntPtr vmPtr)\n"
@@ -117,18 +175,26 @@ def patch_lemon070_jni_and_asset_manager(root: Path) -> None:
         "                return;\n\n"
         "            IntPtr envPtr = IntPtr.Zero;\n"
         "            Result res = VM->Functions->GetEnv(VM, out envPtr, (int)Version.V1_6);\n\n"
-        "            if (res != Result.Detached && envPtr != IntPtr.Zero)\n"
+        "            if ((int)res == 0 && envPtr != IntPtr.Zero)\n"
         "            {\n"
         "                env = (JNIEnv*)envPtr;\n"
         "                return;\n"
         "            }\n\n"
-        "            IntPtr refPtr = IntPtr.Zero;\n"
-        "            res = VM->Functions->AttachCurrentThread(VM, out JNIEnv* localEnv, ref refPtr);\n"
+        "            if (Thread.CurrentThread.IsBackground && VM->Functions->AttachCurrentThreadAsDaemon != null)\n"
+        "            {\n"
+        "                res = VM->Functions->AttachCurrentThreadAsDaemon(VM, out IntPtr daemonEnv, IntPtr.Zero);\n"
+        "                if ((int)res == 0 && daemonEnv != IntPtr.Zero)\n"
+        "                {\n"
+        "                    env = (JNIEnv*)daemonEnv;\n"
+        "                    return;\n"
+        "                }\n"
+        "            }\n\n"
+        "            res = VM->Functions->AttachCurrentThread(VM, out JNIEnv* localEnv, IntPtr.Zero);\n"
         "            if ((int)res == 0 && localEnv != null)\n"
         "                env = localEnv;\n"
         "        }\n"
         "    }",
-        "JNI.cs Initialize null/AttachCurrentThread guard",
+        "JNI.cs Initialize null/AttachCurrentThreadAsDaemon/AttachCurrentThread(NULL) fix",
     )
     jni_text = replace_once(
         jni_text,
@@ -160,6 +226,8 @@ def patch_lemon070_jni_and_asset_manager(root: Path) -> None:
         "            {\n"
         "                if (ClassCache.TryGetValue(name, out JClass? found) && found != null && found.Valid())\n"
         "                    return NewLocalRef<JClass>(found);\n\n"
+        "                if (Env == null)\n"
+        "                    return new JClass { Handle = IntPtr.Zero, ReferenceType = JNI.ReferenceType.Local };\n\n"
         "                IntPtr nameAnsi = Marshal.StringToHGlobalAnsi(name);\n"
         "                IntPtr res = Env->Functions->FindClass(Env, nameAnsi);\n"
         "                Marshal.FreeHGlobal(nameAnsi);\n\n"
@@ -174,14 +242,437 @@ def patch_lemon070_jni_and_asset_manager(root: Path) -> None:
         "    }",
         "JNI.cs FindClass thread-safe + return LocalRef",
     )
+    jni_text = replace_once(
+        jni_text,
+        "    public static T NewGlobalRef<T>(JObject lobj) where T : JObject, new()\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            IntPtr res = Env->Functions->NewGlobalRef(Env, lobj.Handle);\n"
+        "            return new T() { Handle = res, ReferenceType = JNI.ReferenceType.Global };\n"
+        "        }\n"
+        "    }\n\n"
+        "    public static void DeleteGlobalRef(JObject gref)\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            if (gref == null)\n"
+        "                return;\n\n"
+        "            if (!gref.Valid())\n"
+        "                return;\n\n"
+        "            Env->Functions->DeleteGlobalRef(Env, gref.Handle);\n"
+        "        }\n"
+        "    }",
+        "    public static T NewGlobalRef<T>(JObject lobj) where T : JObject, new()\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            if (lobj == null || !lobj.Valid() || Env == null)\n"
+        "                return new T() { Handle = IntPtr.Zero, ReferenceType = JNI.ReferenceType.Global };\n\n"
+        "            IntPtr res = Env->Functions->NewGlobalRef(Env, lobj.Handle);\n"
+        "            return new T() { Handle = res, ReferenceType = JNI.ReferenceType.Global };\n"
+        "        }\n"
+        "    }\n\n"
+        "    public static void DeleteGlobalRef(JObject gref)\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            if (gref == null || !gref.Valid() || Env == null)\n"
+        "                return;\n\n"
+        "            Env->Functions->DeleteGlobalRef(Env, gref.Handle);\n"
+        "        }\n"
+        "    }",
+        "JNI.cs NewGlobalRef + DeleteGlobalRef null guards",
+    )
+    jni_text = replace_once(
+        jni_text,
+        "    public static void DeleteLocalRef(JObject lref)\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            if (lref == null)\n"
+        "                return;\n\n"
+        "            if (!lref.Valid())\n"
+        "                return;\n\n"
+        "            Env->Functions->DeleteLocalRef(Env, lref.Handle);\n"
+        "        }\n"
+        "    }",
+        "    public static void DeleteLocalRef(JObject lref)\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            if (lref == null || !lref.Valid() || Env == null)\n"
+        "                return;\n\n"
+        "            Env->Functions->DeleteLocalRef(Env, lref.Handle);\n"
+        "        }\n"
+        "    }",
+        "JNI.cs DeleteLocalRef null guard",
+    )
+    jni_text = replace_once(
+        jni_text,
+        "    public static T NewLocalRef<T>(JObject obj) where T : JObject, new()\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            IntPtr res = Env->Functions->NewLocalRef(Env, obj.Handle);\n"
+        "            return new T() { Handle = res, ReferenceType = JNI.ReferenceType.Local };\n"
+        "        }\n"
+        "    }",
+        "    public static T NewLocalRef<T>(JObject obj) where T : JObject, new()\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            if (obj == null || !obj.Valid() || Env == null)\n"
+        "                return new T() { Handle = IntPtr.Zero, ReferenceType = JNI.ReferenceType.Local };\n\n"
+        "            IntPtr res = Env->Functions->NewLocalRef(Env, obj.Handle);\n"
+        "            return new T() { Handle = res, ReferenceType = JNI.ReferenceType.Local };\n"
+        "        }\n"
+        "    }",
+        "JNI.cs NewLocalRef null guard",
+    )
+    jni_text = replace_once(
+        jni_text,
+        "    public static T NewObject<T>(JClass cls, JMethodID methodID, params JValue[] args) where T : JObject, new()\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            IntPtr argsPtr = Marshal.UnsafeAddrOfPinnedArrayElement(args, 0);\n"
+        "            IntPtr res = Env->Functions->NewObjectA(Env, cls.Handle, methodID, argsPtr);\n"
+        "            Console.WriteLine($\"Res: {res}\");\n"
+        "            JObject local = new() { Handle = res, ReferenceType = JNI.ReferenceType.Local };\n"
+        "            return NewGlobalRef<T>(local);\n"
+        "        }\n"
+        "    }",
+        "    public static T NewObject<T>(JClass cls, JMethodID methodID, params JValue[] args) where T : JObject, new()\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            fixed (JValue* v = args)\n"
+        "            {\n"
+        "                IntPtr res = Env->Functions->NewObjectA(Env, cls.Handle, methodID, (IntPtr)v);\n"
+        "                using JObject local = new() { Handle = res, ReferenceType = JNI.ReferenceType.Local };\n"
+        "                return NewGlobalRef<T>(local);\n"
+        "            }\n"
+        "        }\n"
+        "    }",
+        "JNI.cs NewObject fixed pin + remove Console.WriteLine + using local",
+    )
+    jni_text = replace_once(
+        jni_text,
+        "    public static T CallObjectMethod<T>(JObject obj, JMethodID methodID, params JValue[] args) where T : JObject, new()\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            IntPtr argsPtr = Marshal.UnsafeAddrOfPinnedArrayElement(args, 0);\n\n"
+        "            fixed (JValue* v = args)\n"
+        "            {\n"
+        "                IntPtr res = Env->Functions->CallObjectMethodA(Env, obj.Handle, methodID, argsPtr);\n"
+        "                using JObject local = new() { Handle = res, ReferenceType = JNI.ReferenceType.Local };\n"
+        "                return NewGlobalRef<T>(local);\n"
+        "            }\n"
+        "        }\n"
+        "    }\n\n"
+        "    public static T CallMethod<T>(JObject obj, JMethodID methodID, params JValue[] args)\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            Type t = typeof(T);\n"
+        "            IntPtr argsPtr = Marshal.UnsafeAddrOfPinnedArrayElement(args, 0);",
+        "    public static T CallObjectMethod<T>(JObject obj, JMethodID methodID, params JValue[] args) where T : JObject, new()\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            fixed (JValue* v = args)\n"
+        "            {\n"
+        "                IntPtr res = Env->Functions->CallObjectMethodA(Env, obj.Handle, methodID, (IntPtr)v);\n"
+        "                using JObject local = new() { Handle = res, ReferenceType = JNI.ReferenceType.Local };\n"
+        "                return NewGlobalRef<T>(local);\n"
+        "            }\n"
+        "        }\n"
+        "    }\n\n"
+        "    public static T CallMethod<T>(JObject obj, JMethodID methodID, params JValue[] args)\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            Type t = typeof(T);\n"
+        "            fixed (JValue* v = args)\n"
+        "            {\n"
+        "                IntPtr argsPtr = (IntPtr)v;",
+        "JNI.cs CallObjectMethod + CallMethod fixed pin",
+    )
+    jni_text = replace_once(
+        jni_text,
+        "                throw new ArgumentException($\"CallMethod Type {t} not supported.\");\n"
+        "            }\n"
+        "        }\n"
+        "    }\n\n"
+        "    public static void CallVoidMethod(JObject obj, JMethodID methodID, params JValue[] args)\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            IntPtr argsPtr = Marshal.UnsafeAddrOfPinnedArrayElement(args, 0);\n"
+        "            Env->Functions->CallVoidMethodA(Env, obj.Handle, methodID, argsPtr);\n"
+        "        }\n"
+        "    }\n\n"
+        "    public static T CallNonvirtualObjectMethod<T>(JObject obj, JClass cls, JMethodID methodID, params JValue[] args) where T : JObject, new()\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            IntPtr argsPtr = Marshal.UnsafeAddrOfPinnedArrayElement(args, 0);\n"
+        "            IntPtr res = Env->Functions->CallNonvirtualObjectMethodA(Env, obj.Handle, cls.Handle, methodID, argsPtr);\n\n"
+        "            using JObject local = new() { Handle = res, ReferenceType = JNI.ReferenceType.Local };\n"
+        "            return NewGlobalRef<T>(local);\n"
+        "        }\n"
+        "    }\n\n"
+        "    public static T CallNonvirtualMethod<T>(JObject obj, JClass cls, JMethodID methodID, params JValue[] args)\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            Type t = typeof(T);\n"
+        "            IntPtr argsPtr = Marshal.UnsafeAddrOfPinnedArrayElement(args, 0);",
+        "                throw new ArgumentException($\"CallMethod Type {t} not supported.\");\n"
+        "            }\n"
+        "            }\n"
+        "        }\n"
+        "    }\n\n"
+        "    public static void CallVoidMethod(JObject obj, JMethodID methodID, params JValue[] args)\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            fixed (JValue* v = args)\n"
+        "            {\n"
+        "                Env->Functions->CallVoidMethodA(Env, obj.Handle, methodID, (IntPtr)v);\n"
+        "            }\n"
+        "        }\n"
+        "    }\n\n"
+        "    public static T CallNonvirtualObjectMethod<T>(JObject obj, JClass cls, JMethodID methodID, params JValue[] args) where T : JObject, new()\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            fixed (JValue* v = args)\n"
+        "            {\n"
+        "                IntPtr res = Env->Functions->CallNonvirtualObjectMethodA(Env, obj.Handle, cls.Handle, methodID, (IntPtr)v);\n"
+        "                using JObject local = new() { Handle = res, ReferenceType = JNI.ReferenceType.Local };\n"
+        "                return NewGlobalRef<T>(local);\n"
+        "            }\n"
+        "        }\n"
+        "    }\n\n"
+        "    public static T CallNonvirtualMethod<T>(JObject obj, JClass cls, JMethodID methodID, params JValue[] args)\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            Type t = typeof(T);\n"
+        "            fixed (JValue* v = args)\n"
+        "            {\n"
+        "                IntPtr argsPtr = (IntPtr)v;",
+        "JNI.cs CallVoidMethod + CallNonvirtual* fixed pin",
+    )
+    jni_text = replace_once(
+        jni_text,
+        "                throw new ArgumentException($\"CallNonvirtualMethod Type {t} not supported.\");\n"
+        "            }\n"
+        "        }\n"
+        "    }\n\n"
+        "    public static void CallNonvirtualVoidMethod(JObject obj, JClass cls, JMethodID methodID, params JValue[] args)\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            IntPtr argsPtr = Marshal.UnsafeAddrOfPinnedArrayElement(args, 0);\n"
+        "            Env->Functions->CallNonvirtualVoidMethodA(Env, obj.Handle, cls.Handle, methodID, argsPtr);\n"
+        "        }\n"
+        "    }",
+        "                throw new ArgumentException($\"CallNonvirtualMethod Type {t} not supported.\");\n"
+        "            }\n"
+        "            }\n"
+        "        }\n"
+        "    }\n\n"
+        "    public static void CallNonvirtualVoidMethod(JObject obj, JClass cls, JMethodID methodID, params JValue[] args)\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            fixed (JValue* v = args)\n"
+        "            {\n"
+        "                Env->Functions->CallNonvirtualVoidMethodA(Env, obj.Handle, cls.Handle, methodID, (IntPtr)v);\n"
+        "            }\n"
+        "        }\n"
+        "    }",
+        "JNI.cs CallNonvirtualMethod close + CallNonvirtualVoidMethod fixed pin",
+    )
+    jni_text = replace_once(
+        jni_text,
+        "    public static JMethodID GetStaticMethodID(JClass cls, string name, string sig)\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            IntPtr nameAnsi = Marshal.StringToHGlobalAnsi(name);\n"
+        "            IntPtr sigAnsi = Marshal.StringToHGlobalAnsi(sig);\n"
+        "            JMethodID id = Env->Functions->GetStaticMethodID(Env, cls.Handle, nameAnsi, sigAnsi);\n"
+        "            return id;\n"
+        "        }\n"
+        "    }\n\n"
+        "    public static T CallStaticObjectMethod<T>(JClass cls, JMethodID methodID, params JValue[] args) where T : JObject, new()\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            IntPtr argsPtr = Marshal.UnsafeAddrOfPinnedArrayElement(args, 0);\n"
+        "            IntPtr res = Env->Functions->CallStaticObjectMethodA(Env, cls.Handle, methodID.Handle, argsPtr);\n"
+        "            using JObject local = new() { Handle = res, ReferenceType = JNI.ReferenceType.Local };\n"
+        "            return NewGlobalRef<T>(local);\n"
+        "        }\n"
+        "    }\n\n"
+        "    public static T CallStaticMethod<T>(JClass cls, JMethodID methodID, params JValue[] args)\n"
+        "    {\n"
+        "        Type t = typeof(T);\n"
+        "        IntPtr argsPtr = Marshal.UnsafeAddrOfPinnedArrayElement(args, 0);",
+        "    public static JMethodID GetStaticMethodID(JClass cls, string name, string sig)\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            IntPtr nameAnsi = Marshal.StringToHGlobalAnsi(name);\n"
+        "            IntPtr sigAnsi = Marshal.StringToHGlobalAnsi(sig);\n"
+        "            JMethodID id = Env->Functions->GetStaticMethodID(Env, cls.Handle, nameAnsi, sigAnsi);\n"
+        "            Marshal.FreeHGlobal(nameAnsi);\n"
+        "            Marshal.FreeHGlobal(sigAnsi);\n"
+        "            return id;\n"
+        "        }\n"
+        "    }\n\n"
+        "    public static T CallStaticObjectMethod<T>(JClass cls, JMethodID methodID, params JValue[] args) where T : JObject, new()\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            fixed (JValue* v = args)\n"
+        "            {\n"
+        "                IntPtr res = Env->Functions->CallStaticObjectMethodA(Env, cls.Handle, methodID.Handle, (IntPtr)v);\n"
+        "                using JObject local = new() { Handle = res, ReferenceType = JNI.ReferenceType.Local };\n"
+        "                return NewGlobalRef<T>(local);\n"
+        "            }\n"
+        "        }\n"
+        "    }\n\n"
+        "    public static T CallStaticMethod<T>(JClass cls, JMethodID methodID, params JValue[] args)\n"
+        "    {\n"
+        "        Type t = typeof(T);\n"
+        "        fixed (JValue* v = args)\n"
+        "        {\n"
+        "            IntPtr argsPtr = (IntPtr)v;",
+        "JNI.cs GetStaticMethodID FreeHGlobal + CallStatic* fixed pin",
+    )
+    jni_text = replace_once(
+        jni_text,
+        "        else\n"
+        "        {\n"
+        "            throw new ArgumentException($\"CallStaticMethod Type {t} not supported.\");\n"
+        "        }\n"
+        "    }\n\n"
+        "    public static void CallStaticVoidMethod(JClass cls, JMethodID methodID, params JValue[] args)\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            IntPtr argsPtr = Marshal.UnsafeAddrOfPinnedArrayElement(args, 0);\n"
+        "            Env->Functions->CallStaticVoidMethodA(Env, cls.Handle, methodID, argsPtr);\n"
+        "        }\n"
+        "    }",
+        "        else\n"
+        "        {\n"
+        "            throw new ArgumentException($\"CallStaticMethod Type {t} not supported.\");\n"
+        "        }\n"
+        "        }\n"
+        "    }\n\n"
+        "    public static void CallStaticVoidMethod(JClass cls, JMethodID methodID, params JValue[] args)\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            fixed (JValue* v = args)\n"
+        "            {\n"
+        "                Env->Functions->CallStaticVoidMethodA(Env, cls.Handle, methodID, (IntPtr)v);\n"
+        "            }\n"
+        "        }\n"
+        "    }",
+        "JNI.cs CallStaticMethod close + CallStaticVoidMethod fixed pin",
+    )
+    jni_text = replace_once(
+        jni_text,
+        "            IntPtr res = Env->Functions->GetStringUTFChars(Env, str.Handle, out byte isCopy);\n"
+        "            string? resultString = Marshal.PtrToStringAuto(res);\n"
+        "            Env->Functions->ReleaseStringChars(Env, str.Handle, res);",
+        "            IntPtr res = Env->Functions->GetStringUTFChars(Env, str.Handle, out byte isCopy);\n"
+        "            string? resultString = res != IntPtr.Zero ? Marshal.PtrToStringUTF8(res) : null;\n"
+        "            if (res != IntPtr.Zero)\n"
+        "                Env->Functions->ReleaseStringUTFChars(Env, str.Handle, res);",
+        "JNI.cs GetJStringString ReleaseStringUTFChars + PtrToStringUTF8",
+    )
+    jni_text = replace_once(
+        jni_text,
+        "            else if (t == typeof(long))\n"
+        "            {\n"
+        "                res = Env->Functions->NewBooleanArray(Env, length);\n"
+        "            }\n"
+        "            else if (t == typeof(float))\n"
+        "            {\n"
+        "                res = Env->Functions->NewBooleanArray(Env, length);\n"
+        "            }\n"
+        "            else if (t == typeof(double))\n"
+        "            {\n"
+        "                res = Env->Functions->NewBooleanArray(Env, length);\n"
+        "            }",
+        "            else if (t == typeof(long))\n"
+        "            {\n"
+        "                res = Env->Functions->NewLongArray(Env, length);\n"
+        "            }\n"
+        "            else if (t == typeof(float))\n"
+        "            {\n"
+        "                res = Env->Functions->NewFloatArray(Env, length);\n"
+        "            }\n"
+        "            else if (t == typeof(double))\n"
+        "            {\n"
+        "                res = Env->Functions->NewDoubleArray(Env, length);\n"
+        "            }",
+        "JNI.cs NewArray long/float/double",
+    )
+    jni_text = replace_once(
+        jni_text,
+        "    public static void DeleteWeakGlobalRef(JObject obj)\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            Env->Functions->DeleteWeakGlobalRef(Env, obj.Handle);\n"
+        "        }\n"
+        "    }\n\n"
+        "    public static bool ExceptionCheck()\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            return Convert.ToBoolean(Env->Functions->ExceptionCheck(Env));\n"
+        "        }\n"
+        "    }",
+        "    public static void DeleteWeakGlobalRef(JObject obj)\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            if (obj == null || !obj.Valid() || Env == null)\n"
+        "                return;\n\n"
+        "            Env->Functions->DeleteWeakGlobalRef(Env, obj.Handle);\n"
+        "        }\n"
+        "    }\n\n"
+        "    public static bool ExceptionCheck()\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            if (Env == null)\n"
+        "                return false;\n"
+        "            return Convert.ToBoolean(Env->Functions->ExceptionCheck(Env));\n"
+        "        }\n"
+        "    }",
+        "JNI.cs DeleteWeakGlobalRef + ExceptionCheck null guards",
+    )
     write_utf8(jni_path, jni_text)
 
     # Fix 3: APKAssetManager.cs
     # - Fix DoesAssetExist when path has no '/' (e.g. "lemon_stage.txt", "lemon_patch_date.txt")
     # - Clear pending JNI exception BEFORE returning null in GetAssetStream / GetAssetBytes
-    # - Null-check assets array in GetDirectoryContents / DoesAssetExist
+    # - Null-check assets array in GetDirectoryContents / DoesAssetExist, and dispose each JString immediately
+    # - Fix GetAssetBytes JClass local ref leak + use 64KB buffer
+    # - Fix APKAssetStream.Read offset bug (pass 0 for javaBuffer offset, copy into buffer[offset..])
     # - Safely obtain Context via UnityPlayer.currentActivity OR ActivityThread.currentApplication()
-    #   (critical for Unity 2023/Unity 6 GameActivity apps such as Sonic Dream Team!)
     aam_path = root / "MelonLoader/Utils/APKAssetManager.cs"
     aam_text = aam_path.read_text(encoding="utf-8")
     aam_text = replace_once(
@@ -192,7 +683,19 @@ def patch_lemon070_jni_and_asset_manager(root: Path) -> None:
         "        using JClass assetManagerClass = JNI.GetObjectClass(assetManager);\n"
         "        using JObject asset = JNI.CallObjectMethod<JObject>(assetManager, JNI.GetMethodID(assetManagerClass, \"open\", \"(Ljava/lang/String;)Ljava/io/InputStream;\"), new JValue(pathString));\n"
         "        if (asset == null || !asset.Valid())\n"
-        "            return [];",
+        "            return [];\n\n"
+        "        using MemoryStream outputStream = new();\n\n"
+        "        using JArray<sbyte> buffer = JNI.NewArray<sbyte>(1024);\n"
+        "        JMethodID readMethodID = JNI.GetMethodID(JNI.GetObjectClass(asset), \"read\", \"([B)I\");\n\n"
+        "        int bytesRead = 0;\n"
+        "        while ((bytesRead = JNI.CallMethod<int>(asset, readMethodID, new JValue(buffer))) > 0)\n"
+        "        {\n"
+        "            byte[] managedBuffer = (byte[])(Array)buffer.GetElements();\n"
+        "            outputStream.Write(managedBuffer, 0, bytesRead);\n"
+        "        }\n\n"
+        "        using JClass assetClass = JNI.GetObjectClass(asset);\n"
+        "        JMethodID closeMethodID = JNI.GetMethodID(assetClass, \"close\", \"()V\");\n"
+        "        JNI.CallVoidMethod(asset, closeMethodID);",
         "    public static byte[] GetAssetBytes(string path)\n"
         "    {\n"
         "        if (assetManager == null || !assetManager.Valid())\n"
@@ -202,8 +705,20 @@ def patch_lemon070_jni_and_asset_manager(root: Path) -> None:
         "        using JObject asset = JNI.CallObjectMethod<JObject>(assetManager, JNI.GetMethodID(assetManagerClass, \"open\", \"(Ljava/lang/String;)Ljava/io/InputStream;\"), new JValue(pathString));\n"
         "        HandleException();\n"
         "        if (asset == null || !asset.Valid())\n"
-        "            return [];",
-        "APKAssetManager.cs GetAssetBytes HandleException before return",
+        "            return [];\n\n"
+        "        using MemoryStream outputStream = new();\n"
+        "        using JArray<sbyte> buffer = JNI.NewArray<sbyte>(65536);\n"
+        "        using JClass assetClass = JNI.GetObjectClass(asset);\n"
+        "        JMethodID readMethodID = JNI.GetMethodID(assetClass, \"read\", \"([B)I\");\n\n"
+        "        int bytesRead = 0;\n"
+        "        while ((bytesRead = JNI.CallMethod<int>(asset, readMethodID, new JValue(buffer))) > 0)\n"
+        "        {\n"
+        "            byte[] managedBuffer = (byte[])(Array)buffer.GetElements();\n"
+        "            outputStream.Write(managedBuffer, 0, bytesRead);\n"
+        "        }\n\n"
+        "        JMethodID closeMethodID = JNI.GetMethodID(assetClass, \"close\", \"()V\");\n"
+        "        JNI.CallVoidMethod(asset, closeMethodID);",
+        "APKAssetManager.cs GetAssetBytes HandleException + JClass reuse + 64KB buffer",
     )
     aam_text = replace_once(
         aam_text,
@@ -263,7 +778,13 @@ def patch_lemon070_jni_and_asset_manager(root: Path) -> None:
         "        HandleException();\n"
         "        if (assets == null || !assets.Valid())\n"
         "            return [];\n\n"
-        "        return [.. assets.Select(a => a.GetString())];\n"
+        "        var list = new System.Collections.Generic.List<string>(assets.Length);\n"
+        "        foreach (JString js in assets)\n"
+        "        {\n"
+        "            using (js)\n"
+        "                list.Add(js.GetString());\n"
+        "        }\n"
+        "        return [.. list];\n"
         "    }\n\n"
         "    public static bool DoesAssetExist(string path)\n"
         "    {\n"
@@ -278,9 +799,50 @@ def patch_lemon070_jni_and_asset_manager(root: Path) -> None:
         "        HandleException();\n"
         "        if (assets == null || !assets.Valid())\n"
         "            return false;\n\n"
-        "        return assets.Any(js => string.Equals(JNI.GetJStringString(js), fileName, StringComparison.Ordinal));\n"
+        "        bool found = false;\n"
+        "        foreach (JString js in assets)\n"
+        "        {\n"
+        "            using (js)\n"
+        "            {\n"
+        "                if (!found && string.Equals(JNI.GetJStringString(js), fileName, StringComparison.Ordinal))\n"
+        "                    found = true;\n"
+        "            }\n"
+        "        }\n"
+        "        return found;\n"
         "    }",
-        "APKAssetManager.cs GetDirectoryContents + DoesAssetExist safe root/null handling",
+        "APKAssetManager.cs GetDirectoryContents + DoesAssetExist safe root/null + dispose JString",
+    )
+    aam_text = replace_once(
+        aam_text,
+        "        public override int Read(byte[] buffer, int offset, int count)\n"
+        "        {\n"
+        "            using JArray<sbyte> javaBuffer = JNI.NewArray<sbyte>(count);\n\n"
+        "            int read = JNI.CallMethod<int>(_streamObject, _readJmid, new JValue(javaBuffer), new JValue(offset), new JValue(count));\n"
+        "            HandleException();\n\n"
+        "            if (read == -1)\n"
+        "                return 0;\n\n"
+        "            for (int i = 0; i < read; i++)\n"
+        "            {\n"
+        "                buffer[i] = (byte)javaBuffer[i];\n"
+        "            }\n\n"
+        "            _pos += read;\n"
+        "            return read;\n"
+        "        }",
+        "        public override int Read(byte[] buffer, int offset, int count)\n"
+        "        {\n"
+        "            if (count <= 0)\n"
+        "                return 0;\n"
+        "            using JArray<sbyte> javaBuffer = JNI.NewArray<sbyte>(count);\n\n"
+        "            int read = JNI.CallMethod<int>(_streamObject, _readJmid, new JValue(javaBuffer), new JValue(0), new JValue(count));\n"
+        "            HandleException();\n\n"
+        "            if (read <= 0)\n"
+        "                return 0;\n\n"
+        "            sbyte[] elems = javaBuffer.GetElements();\n"
+        "            Buffer.BlockCopy(elems, 0, buffer, offset, read);\n\n"
+        "            _pos += read;\n"
+        "            return read;\n"
+        "        }",
+        "APKAssetManager.cs APKAssetStream.Read offset + BlockCopy fix",
     )
     aam_text = replace_once(
         aam_text,
@@ -401,6 +963,12 @@ static const char *sig_name(int sig) {
     }
 }
 
+static const char *base_name(const char *p) {
+    if (!p) return "<unknown>";
+    const char *s = strrchr(p, '/');
+    return s ? (s + 1) : p;
+}
+
 static void append_file_line(const char *path, const char *line) {
     if (!path || !path[0] || !line) return;
     int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0664);
@@ -432,7 +1000,7 @@ static void crash_signal_handler(int sig, siginfo_t *info, void *uctx) {
     const char *mod_pc = "<unknown>";
     uintptr_t off_pc = 0;
     if (pc && dladdr((void *)(uintptr_t)pc, &dl_pc) && dl_pc.dli_fname) {
-        mod_pc = dl_pc.dli_fname;
+        mod_pc = base_name(dl_pc.dli_fname);
         off_pc = (uintptr_t)pc - (uintptr_t)dl_pc.dli_fbase;
     }
 
@@ -441,26 +1009,23 @@ static void crash_signal_handler(int sig, siginfo_t *info, void *uctx) {
     const char *mod_lr = "<unknown>";
     uintptr_t off_lr = 0;
     if (lr && dladdr((void *)(uintptr_t)lr, &dl_lr) && dl_lr.dli_fname) {
-        mod_lr = dl_lr.dli_fname;
+        mod_lr = base_name(dl_lr.dli_fname);
         off_lr = (uintptr_t)lr - (uintptr_t)dl_lr.dli_fbase;
     }
 
-    char buf[1280];
+    char buf[1024];
     snprintf(
         buf,
         sizeof(buf),
-        "[MelonLoader073][FATAL_SIGNAL] %s (%d) code=%d fault=0x%lx pc=0x%llx (%s+0x%lx) lr=0x%llx (%s+0x%lx) sp=0x%llx last=[%s]",
+        "[ML073] %s(%d) code=%d fault=0x%lx pc=%s+0x%lx lr=%s+0x%lx last=[%s]",
         sig_name(sig),
         sig,
         code,
         (unsigned long)fault,
-        (unsigned long long)pc,
         mod_pc,
         (unsigned long)off_pc,
-        (unsigned long long)lr,
         mod_lr,
         (unsigned long)off_lr,
-        (unsigned long long)sp,
         g_last_checkpoint
     );
 
@@ -1720,23 +2285,49 @@ internal delegate nint GetJavaVMFn();
         "        catch { }\n"
         "        return Process.GetCurrentProcess().Modules.OfType<ProcessModule>()\n"
         "            .FirstOrDefault(x => x.FileName.Contains(\"libunity.so\"))?.FileName;\n"
+        "    }\n\n"
+        "    private static nint FindLibUnityAddress()\n"
+        "    {\n"
+        "        if (Proxy.Android.AndroidProxy.UnityHandle != IntPtr.Zero)\n"
+        "        {\n"
+        "            foreach (string sym in new[] { \"JNI_OnLoad\", \"UnityMain\", \"UnitySendMessage\", \"JNI_OnUnload\", \"nativeDone\" })\n"
+        "            {\n"
+        "                if (NativeLibrary.TryGetExport(Proxy.Android.AndroidProxy.UnityHandle, sym, out nint addr) && addr != IntPtr.Zero)\n"
+        "                    return addr;\n"
+        "            }\n"
+        "        }\n"
+        "        try\n"
+        "        {\n"
+        "            foreach (string line in File.ReadLines(\"/proc/self/maps\"))\n"
+        "            {\n"
+        "                if (!line.Contains(\"libunity.so\", StringComparison.Ordinal)) continue;\n"
+        "                int dash = line.IndexOf('-');\n"
+        "                if (dash > 0 && ulong.TryParse(line[..dash], System.Globalization.NumberStyles.HexNumber, null, out ulong start))\n"
+        "                    return (nint)start;\n"
+        "            }\n"
+        "        }\n"
+        "        catch { }\n"
+        "        return IntPtr.Zero;\n"
         "    }\n"
         "#endif",
-        "PltHook.cs Android PlayerFileName",
+        "PltHook.cs Android PlayerFileName + FindLibUnityAddress",
     )
     plt_text = replace_once(
         plt_text,
         "#else\n            pltHookOpened = PlthookOpen(ref pltHook, PlayerFileName) == 0;\n#endif",
         "#elif ANDROID\n"
-        "        if (Proxy.Android.AndroidProxy.UnityHandle != IntPtr.Zero)\n"
+        "        nint unityAddr = FindLibUnityAddress();\n"
+        "        if (unityAddr != IntPtr.Zero)\n"
+        "            pltHookOpened = PlthookOpenByAddress(ref pltHook, unityAddr) == 0;\n"
+        "        if (!pltHookOpened && Proxy.Android.AndroidProxy.UnityHandle != IntPtr.Zero)\n"
         "            pltHookOpened = PlthookOpenByHandle(ref pltHook, Proxy.Android.AndroidProxy.UnityHandle) == 0;\n"
-        "        if (!pltHookOpened)\n"
+        "        if (!pltHookOpened && !string.IsNullOrEmpty(PlayerFileName))\n"
         "            pltHookOpened = PlthookOpen(ref pltHook, PlayerFileName) == 0;\n"
-        "        Proxy.Android.EarlyLog.Checkpoint(\"plthook\", $\"pltHookOpened={pltHookOpened} target={PlayerFileName ?? \"<handle>\"}\");\n"
+        "        Proxy.Android.EarlyLog.Checkpoint(\"plthook\", $\"pltHookOpened={pltHookOpened} addr=0x{unityAddr:X} target={PlayerFileName ?? \"<handle>\"}\");\n"
         "#else\n"
         "            pltHookOpened = PlthookOpen(ref pltHook, PlayerFileName) == 0;\n"
         "#endif",
-        "PltHook.cs Android open by handle",
+        "PltHook.cs Android open by address first",
     )
     write_utf8(plt_path, plt_text)
 
@@ -1774,6 +2365,8 @@ internal delegate nint GetJavaVMFn();
         "                if (!LoaderConfig.Current.Loader.CapturePlayerLogs)\n"
         "                    ConsoleHandler.ResetHandles();\n"
         "            }",
+        "            if (originalSymbolAddress == IntPtr.Zero)\n"
+        "                return IntPtr.Zero;\n\n"
         "            if (!MonoHandler.SymbolRedirects.TryGetValue(symbolName, out var redirect)\n"
         "                && !Il2CppHandler.SymbolRedirects.TryGetValue(symbolName, out redirect))\n"
         "                return originalSymbolAddress;\n\n"
@@ -1807,6 +2400,17 @@ internal delegate nint GetJavaVMFn();
     )
     write_utf8(msr_path, msr_text)
 
+    # 6b. Utils/WineUtils.cs
+    wu_path = boot / "Utils/WineUtils.cs"
+    wu_text = wu_path.read_text(encoding="utf-8")
+    wu_text = replace_once(
+        wu_text,
+        "#if LINUX\n        IsWine = false;\n#endif",
+        "#if LINUX || ANDROID\n        IsWine = false;\n#endif",
+        "WineUtils.cs ANDROID",
+    )
+    write_utf8(wu_path, wu_text)
+
     # 7. Logging/ConsoleHandler.cs & Logging/MelonLogger.cs
     ch_path = boot / "Logging/ConsoleHandler.cs"
     ch_text = ch_path.read_text(encoding="utf-8")
@@ -1820,6 +2424,39 @@ internal delegate nint GetJavaVMFn();
 
     ml_path = boot / "Logging/MelonLogger.cs"
     ml_text = ml_path.read_text(encoding="utf-8")
+    ml_text = replace_once(
+        ml_text,
+        "    private static void LogToFiles(string? log)\n"
+        "    {\n"
+        "        foreach (var file in logFiles)\n"
+        "        {\n"
+        "            file.BaseStream.Seek(0, SeekOrigin.End);\n"
+        "            if (log == null)\n"
+        "            {\n"
+        "                file.WriteLine();\n"
+        "                continue;\n"
+        "            }\n\n"
+        "            file.WriteLine(log);\n"
+        "        }\n"
+        "    }",
+        "    private static void LogToFiles(string? log)\n"
+        "    {\n"
+        "        lock (logFiles)\n"
+        "        {\n"
+        "            foreach (var file in logFiles)\n"
+        "            {\n"
+        "                file.BaseStream.Seek(0, SeekOrigin.End);\n"
+        "                if (log == null)\n"
+        "                {\n"
+        "                    file.WriteLine();\n"
+        "                    continue;\n"
+        "                }\n\n"
+        "                file.WriteLine(log);\n"
+        "            }\n"
+        "        }\n"
+        "    }",
+        "MelonLogger.cs lock LogToFiles",
+    )
     ml_text = replace_once(
         ml_text,
         "            ConsoleHandler.OpenConsole(LoaderConfig.Current.Console.AlwaysOnTop, title);",
@@ -1969,6 +2606,7 @@ internal static class Il2CppHandler
 #endif
     private static bool il2cppInitDone;
     private static bool invokeStarted;
+    private static readonly object _invokeLock = new();
 
     private static readonly Il2CppLib.InitFn Il2CPPInitDetourFn = InitDetour;
     private static readonly Il2CppLib.RuntimeInvokeFn InvokeDetourFn = InvokeDetour;
@@ -2029,7 +2667,12 @@ internal static class Il2CppHandler
         if (name == null || !name.Contains("Internal_ActiveSceneChanged"))
             return result;
 
-        invokeStarted = true;
+        lock (_invokeLock)
+        {
+            if (invokeStarted)
+                return result;
+            invokeStarted = true;
+        }
         MelonDebug.Log("Invoke hijacked");
 
 #if ANDROID
@@ -2294,6 +2937,33 @@ def patch_managed_melonloader(root: Path) -> None:
     )
     write_utf8(alc_fix_path, alc_fix_text)
 
+    # 3b. InternalUtils/BootstrapInterop.cs -> skip CoreClrDelegateFixer.SanityCheckDetour on Android (ClrMD/ptrace)
+    bi_path = ml / "InternalUtils/BootstrapInterop.cs"
+    bi_text = bi_path.read_text(encoding="utf-8")
+    bi_text = replace_once(
+        bi_text,
+        "    public static void NativeHookAttach(nint target, nint detour)\n"
+        "    {\n"
+        "#if NET6_0_OR_GREATER\n"
+        "        // SanityCheckDetour is able to wrap and fix the bad method in a delegate where possible, so we pass the detour by ref.\n"
+        "        // Herp: Wine/Proton are missing the PssCaptureSnapshot export from kernel32.dll so we skip CoreClrDelegateFixer.SanityCheckDetour under that runtime\n"
+        "        if (!MelonUtils.IsUnderWineOrSteamProton()\n"
+        "            && !CoreClrDelegateFixer.SanityCheckDetour(ref detour))\n"
+        "            return;\n"
+        "#endif",
+        "    public static void NativeHookAttach(nint target, nint detour)\n"
+        "    {\n"
+        "#if NET6_0_OR_GREATER && !ANDROID\n"
+        "        // SanityCheckDetour is able to wrap and fix the bad method in a delegate where possible, so we pass the detour by ref.\n"
+        "        // Herp: Wine/Proton are missing the PssCaptureSnapshot export from kernel32.dll so we skip CoreClrDelegateFixer.SanityCheckDetour under that runtime\n"
+        "        if (!MelonUtils.IsUnderWineOrSteamProton()\n"
+        "            && !CoreClrDelegateFixer.SanityCheckDetour(ref detour))\n"
+        "            return;\n"
+        "#endif",
+        "BootstrapInterop.cs skip SanityCheckDetour on Android",
+    )
+    write_utf8(bi_path, bi_text)
+
     # 5. MelonUtils.cs
     mu_path = ml / "MelonUtils.cs"
     mu_text = mu_path.read_text(encoding="utf-8")
@@ -2329,6 +2999,12 @@ def patch_managed_melonloader(root: Path) -> None:
         "#endif",
         "MelonUtils.cs IsAndroid",
     )
+    mu_text = replace_once(
+        mu_text,
+        "        public static unsafe bool IsGame32Bit() =>\n#if X64\n            false;\n#else\n            true;\n#endif",
+        "        public static unsafe bool IsGame32Bit() =>\n#if X64 || ANDROID\n            false;\n#else\n            true;\n#endif",
+        "MelonUtils.cs IsGame32Bit ANDROID is 64-bit",
+    )
     write_utf8(mu_path, mu_text)
 
     # 6. Utils/MelonEnvironment.cs
@@ -2343,7 +3019,7 @@ def patch_managed_melonloader(root: Path) -> None:
     me_text = replace_once(
         me_text,
         "        public static string GameExecutablePath { get; } =\n#if OSX\n            MelonUtils.GetPathAncestor(Process.GetCurrentProcess()!.MainModule!.FileName, 3);\n#else\n            Process.GetCurrentProcess().MainModule.FileName;\n#endif\n        public static string MelonLoaderDirectory { get; } = Path.Combine(MelonBaseDirectory, \"MelonLoader\");\n        public static string GameRootDirectory { get; } = Path.GetDirectoryName(GameExecutablePath);",
-        "        public static string GameExecutablePath { get; } =\n#if OSX\n            MelonUtils.GetPathAncestor(Process.GetCurrentProcess()!.MainModule!.FileName, 3);\n#elif ANDROID\n            Process.GetCurrentProcess().MainModule?.FileName ?? Path.Combine(MelonBaseDirectory, Path.GetFileName(MelonBaseDirectory));\n#else\n            Process.GetCurrentProcess().MainModule.FileName;\n#endif\n        public static string MelonLoaderDirectory { get; } = Path.Combine(MelonBaseDirectory, \"MelonLoader\");\n#if !ANDROID\n        public static string GameRootDirectory { get; } = Path.GetDirectoryName(GameExecutablePath);\n#else\n        public static string GameRootDirectory { get; } = MelonBaseDirectory;\n        public static string PackageName { get; } = Path.GetFileName(MelonBaseDirectory);\n#endif",
+        "        public static string GameExecutablePath { get; } =\n#if OSX\n            MelonUtils.GetPathAncestor(Process.GetCurrentProcess()!.MainModule!.FileName, 3);\n#elif ANDROID\n            Process.GetCurrentProcess().MainModule?.FileName ?? Path.Combine(MelonBaseDirectory, Path.GetFileName(MelonBaseDirectory));\n#else\n            Process.GetCurrentProcess().MainModule.FileName;\n#endif\n        public static string MelonLoaderDirectory { get; } = Path.Combine(MelonBaseDirectory, \"MelonLoader\");\n#if !ANDROID\n        public static string GameRootDirectory { get; } = Path.GetDirectoryName(GameExecutablePath);\n#else\n        public static string GameRootDirectory { get; } = MelonBaseDirectory;\n        public static string PackageName { get; } = ReadAndroidPackageName();\n        private static string ReadAndroidPackageName()\n        {\n            try\n            {\n                string cmdline = File.ReadAllText(\"/proc/self/cmdline\");\n                int nul = cmdline.IndexOf('\\0');\n                if (nul > 0) cmdline = cmdline[..nul];\n                cmdline = cmdline.Trim();\n                if (!string.IsNullOrEmpty(cmdline) && !cmdline.Contains('/'))\n                    return cmdline;\n            }\n            catch { }\n            return Path.GetFileName(MelonBaseDirectory);\n        }\n#endif",
         "MelonEnvironment.cs Android GameRootDirectory + PackageName",
     )
     me_text = replace_once(
@@ -2386,6 +3062,8 @@ def patch_managed_melonloader(root: Path) -> None:
         "                name += \".dylib\";\n\n"
         "            return dlopen(name, RTLD_NOW);\n"
         "#elif ANDROID\n"
+        "            if (name is \"GameAssembly\" or \"GameAssembly.so\" or \"GameAssembly.dll\")\n"
+        "                name = \"libil2cpp.so\";\n"
         "            string path = name;\n"
         "            if (File.Exists(path))\n"
         "            {\n"
@@ -2479,7 +3157,7 @@ def patch_managed_melonloader(root: Path) -> None:
         "#if !ANDROID\n"
         "                    BundleFileInstance bundleFile = assetsManager.LoadBundleFile(bundlePath);\n"
         "#else\n"
-        "                    Stream bundleStream = APKAssetManager.GetAssetStream(bundlePath);\n"
+        "                    Stream bundleStream = FileOpenSeekableRead(bundlePath);\n"
         "                    BundleFileInstance bundleFile = assetsManager.LoadBundleFile(bundleStream, bundlePath);\n"
         "#endif\n"
         "                    instance = assetsManager.LoadAssetsFileFromBundle(bundleFile, \"globalgamemanagers\");\n"
@@ -2489,11 +3167,11 @@ def patch_managed_melonloader(root: Path) -> None:
         "#if !ANDROID\n"
         "                    instance = assetsManager.LoadAssetsFile(bundlePath, true);\n"
         "#else\n"
-        "                    Stream bundleStream = APKAssetManager.GetAssetStream(bundlePath);\n"
+        "                    Stream bundleStream = FileOpenSeekableRead(bundlePath);\n"
         "                    instance = assetsManager.LoadAssetsFile(bundleStream, bundlePath, true);\n"
         "#endif\n"
         "                }",
-        "UnityInformationHandler.cs APKAssetManager bundle/assets loading",
+        "UnityInformationHandler.cs APKAssetManager seekable bundle/assets loading",
     )
     ui_text = ui_text.replace("File.Exists(", "FileExists(")
     ui_text = ui_text.replace("File.ReadAllBytes(", "FileReadAllBytes(")
@@ -2506,13 +3184,108 @@ def patch_managed_melonloader(root: Path) -> None:
         "        private static byte[] FileReadAllBytes(string path) =>\n"
         "#if !ANDROID\n            File.ReadAllBytes(path);\n#else\n            APKAssetManager.GetAssetBytes(path);\n#endif\n\n"
         "        private static Stream FileOpenRead(string path) =>\n"
-        "#if !ANDROID\n            File.OpenRead(path);\n#else\n            APKAssetManager.GetAssetStream(path);\n#endif\n"
+        "#if !ANDROID\n            File.OpenRead(path);\n#else\n            APKAssetManager.GetAssetStream(path);\n#endif\n\n"
+        "#if ANDROID\n"
+        "        private static Stream FileOpenSeekableRead(string path)\n"
+        "        {\n"
+        "            using Stream? raw = APKAssetManager.GetAssetStream(path);\n"
+        "            if (raw == null)\n"
+        "                throw new FileNotFoundException($\"APK asset not found: {path}\", path);\n"
+        "            var ms = new MemoryStream();\n"
+        "            raw.CopyTo(ms);\n"
+        "            ms.Position = 0;\n"
+        "            return ms;\n"
+        "        }\n"
+        "#endif\n"
         "    }\n}",
-        "UnityInformationHandler.cs FileExists/FileReadAllBytes/FileOpenRead helpers",
+        "UnityInformationHandler.cs FileExists/FileReadAllBytes/FileOpenRead/FileOpenSeekableRead helpers",
     )
     write_utf8(ui_path, ui_text)
 
-    print("[patched] MelonLoader managed core (LoaderConfig, BootstrapLibrary, Core, MelonUtils, MelonEnvironment, NativeLibrary, UnityInformationHandler)")
+    # 9. Fixes/Il2CppInterop/Il2CppICallInjector.cs -> libil2cpp.so on Android
+    icall_path = ml / "Fixes/Il2CppInterop/Il2CppICallInjector.cs"
+    icall_text = icall_path.read_text(encoding="utf-8")
+    icall_text = replace_once(
+        icall_text,
+        "                string gameAssemblyName = \"GameAssembly\";",
+        "#if ANDROID\n"
+        "                string gameAssemblyName = \"libil2cpp.so\";\n"
+        "#else\n"
+        "                string gameAssemblyName = \"GameAssembly\";\n"
+        "#endif",
+        "Il2CppICallInjector.cs libil2cpp.so on Android",
+    )
+    write_utf8(icall_path, icall_text)
+
+    # 10. Fixes/Il2CppInterop/Il2CppInteropInjectorHelpersSetupFix.cs -> remove GetFieldDefaultValueHook on Android
+    setup_fix_path = ml / "Fixes/Il2CppInterop/Il2CppInteropInjectorHelpersSetupFix.cs"
+    setup_fix_text = setup_fix_path.read_text(encoding="utf-8")
+    setup_fix_text = replace_once(
+        setup_fix_text,
+        "#if LINUX\n            instructions = RemoveField(\n                \"GetFieldDefaultValueHook\", _injectorType,\n                instructions);\n#endif",
+        "#if LINUX || ANDROID\n            instructions = RemoveField(\n                \"GetFieldDefaultValueHook\", _injectorType,\n                instructions);\n#endif",
+        "Il2CppInteropInjectorHelpersSetupFix.cs remove GetFieldDefaultValueHook on Android",
+    )
+    write_utf8(setup_fix_path, setup_fix_text)
+
+    # 11. Dependencies/SupportModules/Il2Cpp/Main.cs -> DllImportResolver for GameAssembly -> libil2cpp.so on Android
+    sm_main_path = root / "Dependencies/SupportModules/Il2Cpp/Main.cs"
+    sm_main_text = sm_main_path.read_text(encoding="utf-8")
+    sm_main_text = replace_once(
+        sm_main_text,
+        "            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))\n"
+        "            {\n"
+        "                System.Runtime.InteropServices.NativeLibrary.SetDllImportResolver(typeof(Il2CppInteropRuntime).Assembly,\n"
+        "                    MacOsIl2CppInteropLibraryResolver);\n"
+        "            }",
+        "            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))\n"
+        "            {\n"
+        "                System.Runtime.InteropServices.NativeLibrary.SetDllImportResolver(typeof(Il2CppInteropRuntime).Assembly,\n"
+        "                    MacOsIl2CppInteropLibraryResolver);\n"
+        "            }\n"
+        "#if ANDROID\n"
+        "            System.Runtime.InteropServices.NativeLibrary.SetDllImportResolver(typeof(Il2CppInteropRuntime).Assembly,\n"
+        "                AndroidIl2CppInteropLibraryResolver);\n"
+        "#endif",
+        "SupportModules/Il2Cpp/Main.cs register AndroidIl2CppInteropLibraryResolver",
+    )
+    sm_main_text = replace_once(
+        sm_main_text,
+        "        private static IntPtr MacOsIl2CppInteropLibraryResolver(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)\n"
+        "        {\n"
+        "            if (libraryName == \"GameAssembly\")\n"
+        "            {\n"
+        "                string gameAssemblyPath = Path.Combine(MelonEnvironment.GameExecutablePath, \"Contents\", \"Frameworks\", $\"{libraryName}.dylib\");\n"
+        "                return System.Runtime.InteropServices.NativeLibrary.Load(gameAssemblyPath);\n"
+        "            }\n"
+        "            return IntPtr.Zero;\n"
+        "        }",
+        "        private static IntPtr MacOsIl2CppInteropLibraryResolver(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)\n"
+        "        {\n"
+        "            if (libraryName == \"GameAssembly\")\n"
+        "            {\n"
+        "                string gameAssemblyPath = Path.Combine(MelonEnvironment.GameExecutablePath, \"Contents\", \"Frameworks\", $\"{libraryName}.dylib\");\n"
+        "                return System.Runtime.InteropServices.NativeLibrary.Load(gameAssemblyPath);\n"
+        "            }\n"
+        "            return IntPtr.Zero;\n"
+        "        }\n\n"
+        "#if ANDROID\n"
+        "        private static IntPtr AndroidIl2CppInteropLibraryResolver(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)\n"
+        "        {\n"
+        "            if (libraryName is \"GameAssembly\" or \"GameAssembly.so\" or \"GameAssembly.dll\")\n"
+        "            {\n"
+        "                if (System.Runtime.InteropServices.NativeLibrary.TryLoad(\"libil2cpp.so\", out IntPtr handle))\n"
+        "                    return handle;\n"
+        "                return NativeLibrary.LoadLib(\"libil2cpp.so\");\n"
+        "            }\n"
+        "            return IntPtr.Zero;\n"
+        "        }\n"
+        "#endif",
+        "SupportModules/Il2Cpp/Main.cs AndroidIl2CppInteropLibraryResolver",
+    )
+    write_utf8(sm_main_path, sm_main_text)
+
+    print("[patched] MelonLoader managed core + Il2Cpp SupportModule (GameAssembly->libil2cpp.so, PackageName, 64-bit, ClrMD guard)")
 
 
 def patch_il2cpp_assembly_generator(root: Path) -> None:
@@ -2609,17 +3382,89 @@ def patch_il2cpp_assembly_generator(root: Path) -> None:
         "        {\n"
         "            try\n"
         "            {\n"
-        "                JClass unityClass = JNI.FindClass(\"com/unity3d/player/UnityPlayer\");\n"
-        "                JFieldID activityFieldId = JNI.GetStaticFieldID(unityClass, \"currentActivity\", \"Landroid/app/Activity;\");\n"
-        "                JObject currentActivityObj = JNI.GetStaticObjectField<JObject>(unityClass, activityFieldId);\n"
-        "                JObject applicationInfoObj = JNI.CallObjectMethod<JObject>(currentActivityObj, JNI.GetMethodID(JNI.GetObjectClass(currentActivityObj), \"getApplicationInfo\", \"()Landroid/content/pm/ApplicationInfo;\"));\n"
-        "                JFieldID filesFieldId = JNI.GetFieldID(JNI.GetObjectClass(applicationInfoObj), \"nativeLibraryDir\", \"Ljava/lang/String;\");\n"
-        "                JString pathJString = JNI.GetObjectField<JString>(applicationInfoObj, filesFieldId);\n"
-        "                if (pathJString == null || !pathJString.Valid())\n"
+        "                foreach (string line in File.ReadLines(\"/proc/self/maps\"))\n"
+        "                {\n"
+        "                    int slash = line.IndexOf('/');\n"
+        "                    if (slash < 0) continue;\n"
+        "                    string path = line[slash..].Trim();\n"
+        "                    if (path.EndsWith(\"/libil2cpp.so\", StringComparison.Ordinal) && File.Exists(path))\n"
+        "                        return path;\n"
+        "                }\n"
+        "            }\n"
+        "            catch { }\n\n"
+        "            try\n"
+        "            {\n"
+        "                static void ClearEx()\n"
+        "                {\n"
+        "                    if (JNI.ExceptionCheck())\n"
+        "                        JNI.ExceptionClear();\n"
+        "                }\n\n"
+        "                JObject? ctxObj = null;\n"
+        "                using (JClass unityClass = JNI.FindClass(\"com/unity3d/player/UnityPlayer\"))\n"
+        "                {\n"
+        "                    ClearEx();\n"
+        "                    if (unityClass.Valid())\n"
+        "                    {\n"
+        "                        JFieldID fid = JNI.GetStaticFieldID(unityClass, \"currentActivity\", \"Landroid/app/Activity;\");\n"
+        "                        ClearEx();\n"
+        "                        if (fid.Handle != IntPtr.Zero)\n"
+        "                        {\n"
+        "                            ctxObj = JNI.GetStaticObjectField<JObject>(unityClass, fid);\n"
+        "                            ClearEx();\n"
+        "                        }\n"
+        "                    }\n"
+        "                }\n\n"
+        "                if (ctxObj == null || !ctxObj.Valid())\n"
+        "                {\n"
+        "                    ctxObj?.Dispose();\n"
+        "                    ctxObj = null;\n"
+        "                    using JClass actThread = JNI.FindClass(\"android/app/ActivityThread\");\n"
+        "                    ClearEx();\n"
+        "                    if (actThread.Valid())\n"
+        "                    {\n"
+        "                        JMethodID mid = JNI.GetStaticMethodID(actThread, \"currentApplication\", \"()Landroid/app/Application;\");\n"
+        "                        ClearEx();\n"
+        "                        if (mid.Handle != IntPtr.Zero)\n"
+        "                        {\n"
+        "                            ctxObj = JNI.CallStaticObjectMethod<JObject>(actThread, mid);\n"
+        "                            ClearEx();\n"
+        "                        }\n"
+        "                    }\n"
+        "                }\n\n"
+        "                if (ctxObj == null || !ctxObj.Valid())\n"
+        "                {\n"
+        "                    ctxObj?.Dispose();\n"
         "                    return \"\";\n"
-        "                string nativePath = pathJString.GetString();\n"
-        "                string[] directoryLibs = Directory.GetFiles(nativePath, \"*.so\");\n"
-        "                return directoryLibs.FirstOrDefault(s => s.EndsWith(\"libil2cpp.so\")) ?? \"\";\n"
+        "                }\n\n"
+        "                using (ctxObj)\n"
+        "                using (JClass ctxCls = JNI.GetObjectClass(ctxObj))\n"
+        "                {\n"
+        "                    ClearEx();\n"
+        "                    JMethodID getAppInfoMid = JNI.GetMethodID(ctxCls, \"getApplicationInfo\", \"()Landroid/content/pm/ApplicationInfo;\");\n"
+        "                    ClearEx();\n"
+        "                    using JObject applicationInfoObj = JNI.CallObjectMethod<JObject>(ctxObj, getAppInfoMid);\n"
+        "                    ClearEx();\n"
+        "                    if (applicationInfoObj == null || !applicationInfoObj.Valid())\n"
+        "                        return \"\";\n\n"
+        "                    using JClass appInfoCls = JNI.GetObjectClass(applicationInfoObj);\n"
+        "                    ClearEx();\n"
+        "                    JFieldID filesFieldId = JNI.GetFieldID(appInfoCls, \"nativeLibraryDir\", \"Ljava/lang/String;\");\n"
+        "                    ClearEx();\n"
+        "                    using JString pathJString = JNI.GetObjectField<JString>(applicationInfoObj, filesFieldId);\n"
+        "                    ClearEx();\n"
+        "                    if (pathJString == null || !pathJString.Valid())\n"
+        "                        return \"\";\n\n"
+        "                    string nativePath = pathJString.GetString();\n"
+        "                    if (!string.IsNullOrEmpty(nativePath) && Directory.Exists(nativePath))\n"
+        "                    {\n"
+        "                        string candidate = Path.Combine(nativePath, \"libil2cpp.so\");\n"
+        "                        if (File.Exists(candidate))\n"
+        "                            return candidate;\n"
+        "                        string[] directoryLibs = Directory.GetFiles(nativePath, \"*.so\");\n"
+        "                        return directoryLibs.FirstOrDefault(s => s.EndsWith(\"libil2cpp.so\")) ?? \"\";\n"
+        "                    }\n"
+        "                    return \"\";\n"
+        "                }\n"
         "            }\n"
         "            catch (Exception ex)\n"
         "            {\n"

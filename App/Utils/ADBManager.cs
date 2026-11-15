@@ -212,6 +212,7 @@ internal static partial class ADBManager
 
         logger?.Log($"Pushing {sourceFolderPath}");
 
+        int mkdirRetries = 0;
         for (int i = 0; i < 5; i++)
         {
             try
@@ -222,8 +223,9 @@ internal static partial class ADBManager
             catch (AdbException ex)
             {
                 // keep retrying if its a mkdir issue, it resolves itself
-                if (ex.Message.Contains("secure_mkdirs failed"))
+                if (ex.Message.Contains("secure_mkdirs failed") && mkdirRetries < 10)
                 {
+                    mkdirRetries++;
                     logger?.Log("mkdir error; retrying");
                     i--;
                 }

@@ -332,7 +332,7 @@ public static class LemonLoaderRepairer
 
         using FileStream zipStream = new(apkPath, FileMode.Open, FileAccess.ReadWrite);
         using ZipArchive archive = new(zipStream, ZipArchiveMode.Update);
-        var manifestEntry = archive.Entries.First(e => e.Name == "AndroidManifest.xml");
+        var manifestEntry = archive.Entries.First(e => e.FullName == "AndroidManifest.xml");
         using MemoryStream ms = new();
         using (var s = manifestEntry.Open())
             s.CopyTo(ms);
