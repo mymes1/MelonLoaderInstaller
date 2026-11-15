@@ -726,7 +726,7 @@ public static class AndroidProxy
         {
             try
             {
-                libDir = new JString((nint)str).GetString();
+                libDir = new JString { Handle = (nint)str }.GetString();
                 NativeLibraryDir = libDir;
                 EarlyLog.Checkpoint("proxy_load", $"libDir={libDir}");
             }
