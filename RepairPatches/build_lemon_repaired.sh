@@ -92,14 +92,15 @@ for proj in \
 done
 
 echo "[5/7] Publishing NativeAOT MelonLoader.Bootstrap (libmain.so, linux-bionic-arm64 via .NET 9 + NDK)..."
-dotnet restore MelonLoader.Bootstrap/MelonLoader.Bootstrap.csproj -r linux-bionic-arm64 -p:AndroidBuild=true -p:SolutionDir="$SOL_DIR"
-dotnet publish --no-restore MelonLoader.Bootstrap/MelonLoader.Bootstrap.csproj \
+dotnet publish MelonLoader.Bootstrap/MelonLoader.Bootstrap.csproj \
   -c Release \
   -r linux-bionic-arm64 \
   -p:AndroidBuild=true \
   -p:ForceRID=linux-bionic-arm64 \
   -p:SolutionDir="$SOL_DIR" \
   -p:Version=0.7.3 \
+  -p:DisableUnsupportedError=true \
+  -p:PublishAotUsingRuntimePack=true \
   -p:NativeLib=Shared \
   -p:PublishDir="$ML_DIR/Output/Release/linux-bionic-arm64"
 popd >/dev/null

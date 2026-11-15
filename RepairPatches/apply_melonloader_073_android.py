@@ -355,6 +355,8 @@ def patch_bootstrap_targets_and_csproj(root: Path) -> None:
     </PropertyGroup>
 
     <PropertyGroup Condition="$(IsAndroid) == 'true'">
+        <DisableUnsupportedError>true</DisableUnsupportedError>
+        <PublishAotUsingRuntimePack>true</PublishAotUsingRuntimePack>
         <NdkPropertiesFile>$(ANDROID_NDK_ROOT)/source.properties</NdkPropertiesFile>
         <NdkHost Condition="$(IsWindowsHost) == 'true'">windows-x86_64</NdkHost>
         <NdkHost Condition="$(IsLinuxHost) == 'true'">linux-x86_64</NdkHost>
