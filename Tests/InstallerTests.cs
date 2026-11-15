@@ -231,6 +231,7 @@ public sealed class InstallerTests : IDisposable
     {
         string apkPath = Path.Combine(_workDir, "unaligned_v1_stale.apk");
         byte[] arm64Elf = CreateFakeArm64Elf();
+        byte[] manifestBytes = CreateBinaryManifestBytes("com.example.test", extractNativeLibs: true, targetSdk: 35);
 
         using (var fs = File.Create(apkPath))
         using (var zip = new ZipArchive(fs, ZipArchiveMode.Create))
@@ -242,7 +243,7 @@ public sealed class InstallerTests : IDisposable
                 s.Write(data);
             }
 
-            Add("AndroidManifest.xml", Encoding.UTF8.GetBytes("manifest-placeholder"), CompressionLevel.Optimal);
+            Add("AndroidManifest.xml", manifestBytes, CompressionLevel.Optimal);
             Add("META-INF/MANIFEST.MF", Encoding.UTF8.GetBytes("Manifest-Version: 1.0\r\n"), CompressionLevel.Optimal);
             Add("META-INF/CERT.SF", Encoding.UTF8.GetBytes("Signature-Version: 1.0\r\n"), CompressionLevel.Optimal);
             Add("META-INF/CERT.RSA", new byte[128], CompressionLevel.Optimal);
@@ -259,6 +260,10 @@ public sealed class InstallerTests : IDisposable
         // Re-signing an already signed APK must cleanly strip the previous APK Signing Block and re-align
         string signedTwice = Path.Combine(_workDir, "signed_twice.apk");
         Core.Repair.StandaloneApkSigner.SignApk(signedOnce, signedTwice, logger);
+
+        string? verifyOut = Environment.GetEnvironmentVariable("VERIFY_SIGNED_APK_OUT");
+        if (!string.IsNullOrWhiteSpace(verifyOut))
+            File.Copy(signedTwice, verifyOut, overwrite: true);
 
         foreach (string signedPath in new[] { signedOnce, signedTwice })
         {
@@ -721,13 +726,7 @@ public sealed class InstallerTests : IDisposable
         return buf;
     }
 
-    private static string CreateSyntheticUnityApk(
-        string apkPath,
-        string packageName,
-        string unityVersion,
-        bool extractNativeLibs,
-        int targetSdk,
-        string? libUnityMarker = null)
+    private static byte[] CreateBinaryManifestBytes(string packageName, bool extractNativeLibs, int targetSdk)
     {
         Uri androidNs = new("http://schemas.android.com/apk/res/android");
 
@@ -747,6 +746,18 @@ public sealed class InstallerTests : IDisposable
 
         using MemoryStream manifestStream = new();
         AxmlSaver.SaveDocument(manifestStream, manifest);
+        return manifestStream.ToArray();
+    }
+
+    private static string CreateSyntheticUnityApk(
+        string apkPath,
+        string packageName,
+        string unityVersion,
+        bool extractNativeLibs,
+        int targetSdk,
+        string? libUnityMarker = null)
+    {
+        byte[] manifestBytes = CreateBinaryManifestBytes(packageName, extractNativeLibs, targetSdk);
 
         byte[] ggmBytes = CreateMinimalAssetsFileBytes(unityVersion);
         byte[] arm64Elf = CreateFakeArm64Elf();
@@ -762,7 +773,7 @@ public sealed class InstallerTests : IDisposable
                 s.Write(bytes);
             }
 
-            Add("AndroidManifest.xml", manifestStream.ToArray());
+            Add("AndroidManifest.xml", manifestBytes);
             Add("assets/bin/Data/globalgamemanagers", ggmBytes);
             Add("lib/arm64-v8a/libunity.so", libUnityElf);
             Add("lib/arm64-v8a/libil2cpp.so", arm64Elf);

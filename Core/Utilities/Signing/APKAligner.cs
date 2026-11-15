@@ -85,10 +85,15 @@ namespace MelonLoader.Installer.Core.Utilities.Signing
                         {
                             long align = cd.FileName.EndsWith(".so", StringComparison.OrdinalIgnoreCase) ? 16384L : 4L;
                             int pad = ComputeAlignmentPadding(outMem.Position, lfh.FileNameBytes.Length, lfh.ExtraField.Length, align);
+                            if (pad > 0 && pad < 4)
+                                pad += (int)align;
+
                             if (lfh.ExtraField.Length + pad > ushort.MaxValue && align > 4L)
                             {
                                 align = 4L;
                                 pad = ComputeAlignmentPadding(outMem.Position, lfh.FileNameBytes.Length, lfh.ExtraField.Length, align);
+                                if (pad > 0 && pad < 4)
+                                    pad += (int)align;
                             }
 
                             if (pad > 0 && lfh.ExtraField.Length + pad <= ushort.MaxValue)
