@@ -4244,6 +4244,18 @@ def patch_external_android_deps(root: Path) -> None:
             gj_text = gj_text.replace('"version": "8.0.301"', '"version": "8.0.0"')
             write_utf8(mm_gj, gj_text)
 
+        iced_proj = mm_dir / "external/iced.csproj"
+        if iced_proj.exists():
+            iced_text = iced_proj.read_text(encoding="utf-8")
+            if 'NRT.cs' not in iced_text:
+                iced_text = replace_once(
+                    iced_text,
+                    "  <ItemGroup>\n    <None Remove=\"..\\..\\..\\..\\LICENSE.txt\" />",
+                    "  <ItemGroup>\n    <Compile Remove=\"$(RealProjDir)NRT.cs\" />\n    <None Remove=\"..\\..\\..\\..\\LICENSE.txt\" />",
+                    "MonoMod external/iced.csproj remove duplicate NRT.cs",
+                )
+                write_utf8(iced_proj, iced_text)
+
         android_sys_path = mm_dir / "src/MonoMod.Core/Platforms/Systems/AndroidSystem.cs"
         if android_sys_path.exists():
             as_text = android_sys_path.read_text(encoding="utf-8")
