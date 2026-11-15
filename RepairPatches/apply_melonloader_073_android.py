@@ -83,6 +83,55 @@ def patch_lemon070_jni_and_asset_manager(root: Path) -> None:
     jni_text = jni_path.read_text(encoding="utf-8")
     jni_text = replace_once(
         jni_text,
+        "    public static void Initialize(IntPtr vmPtr)\n"
+        "    {\n"
+        "        if (vmPtr == IntPtr.Zero)\n"
+        "            vmPtr = lastVmPtr;\n\n"
+        "        lastVmPtr = vmPtr;\n\n"
+        "        unsafe\n"
+        "        {\n"
+        "            VM = (JavaVM*)vmPtr;\n\n"
+        "            IntPtr envPtr = IntPtr.Zero;\n"
+        "            Result res = VM->Functions->GetEnv(VM, out envPtr, (int)Version.V1_6);\n\n"
+        "            if (res != Result.Detached && envPtr != IntPtr.Zero)\n"
+        "            {\n"
+        "                env = (JNIEnv*)envPtr;\n"
+        "                return;\n"
+        "            }\n\n"
+        "            IntPtr refPtr = IntPtr.Zero;\n"
+        "            res = VM->Functions->AttachCurrentThread(VM, out JNIEnv* localEnv, ref refPtr);\n\n"
+        "            env = localEnv;\n"
+        "        }\n"
+        "    }",
+        "    public static void Initialize(IntPtr vmPtr)\n"
+        "    {\n"
+        "        if (vmPtr == IntPtr.Zero)\n"
+        "            vmPtr = lastVmPtr;\n"
+        "        if (vmPtr == IntPtr.Zero)\n"
+        "            return;\n\n"
+        "        lastVmPtr = vmPtr;\n\n"
+        "        unsafe\n"
+        "        {\n"
+        "            VM = (JavaVM*)vmPtr;\n"
+        "            if (VM == null || VM->Functions == null)\n"
+        "                return;\n\n"
+        "            IntPtr envPtr = IntPtr.Zero;\n"
+        "            Result res = VM->Functions->GetEnv(VM, out envPtr, (int)Version.V1_6);\n\n"
+        "            if (res != Result.Detached && envPtr != IntPtr.Zero)\n"
+        "            {\n"
+        "                env = (JNIEnv*)envPtr;\n"
+        "                return;\n"
+        "            }\n\n"
+        "            IntPtr refPtr = IntPtr.Zero;\n"
+        "            res = VM->Functions->AttachCurrentThread(VM, out JNIEnv* localEnv, ref refPtr);\n"
+        "            if (res == Result.OK && localEnv != null)\n"
+        "                env = localEnv;\n"
+        "        }\n"
+        "    }",
+        "JNI.cs Initialize null/AttachCurrentThread guard",
+    )
+    jni_text = replace_once(
+        jni_text,
         "    public static JClass FindClass(string name)\n"
         "    {\n"
         "        unsafe\n"
@@ -137,9 +186,19 @@ def patch_lemon070_jni_and_asset_manager(root: Path) -> None:
     aam_text = aam_path.read_text(encoding="utf-8")
     aam_text = replace_once(
         aam_text,
+        "    public static byte[] GetAssetBytes(string path)\n"
+        "    {\n"
+        "        using JString pathString = JNI.NewString(path);\n"
+        "        using JClass assetManagerClass = JNI.GetObjectClass(assetManager);\n"
         "        using JObject asset = JNI.CallObjectMethod<JObject>(assetManager, JNI.GetMethodID(assetManagerClass, \"open\", \"(Ljava/lang/String;)Ljava/io/InputStream;\"), new JValue(pathString));\n"
         "        if (asset == null || !asset.Valid())\n"
         "            return [];",
+        "    public static byte[] GetAssetBytes(string path)\n"
+        "    {\n"
+        "        if (assetManager == null || !assetManager.Valid())\n"
+        "            return [];\n"
+        "        using JString pathString = JNI.NewString(path);\n"
+        "        using JClass assetManagerClass = JNI.GetObjectClass(assetManager);\n"
         "        using JObject asset = JNI.CallObjectMethod<JObject>(assetManager, JNI.GetMethodID(assetManagerClass, \"open\", \"(Ljava/lang/String;)Ljava/io/InputStream;\"), new JValue(pathString));\n"
         "        HandleException();\n"
         "        if (asset == null || !asset.Valid())\n"
@@ -148,10 +207,20 @@ def patch_lemon070_jni_and_asset_manager(root: Path) -> None:
     )
     aam_text = replace_once(
         aam_text,
+        "    public static Stream? GetAssetStream(string path)\n"
+        "    {\n"
+        "        using JString pathString = JNI.NewString(path);\n"
+        "        using JClass assetManagerClass = JNI.GetObjectClass(assetManager);\n"
         "        JObject asset = JNI.CallObjectMethod<JObject>(assetManager, JNI.GetMethodID(assetManagerClass, \"open\", \"(Ljava/lang/String;)Ljava/io/InputStream;\"), new JValue(pathString));\n"
         "        if (asset == null || !asset.Valid())\n"
         "            return null;\n\n"
         "        HandleException();",
+        "    public static Stream? GetAssetStream(string path)\n"
+        "    {\n"
+        "        if (assetManager == null || !assetManager.Valid())\n"
+        "            return null;\n"
+        "        using JString pathString = JNI.NewString(path);\n"
+        "        using JClass assetManagerClass = JNI.GetObjectClass(assetManager);\n"
         "        JObject asset = JNI.CallObjectMethod<JObject>(assetManager, JNI.GetMethodID(assetManagerClass, \"open\", \"(Ljava/lang/String;)Ljava/io/InputStream;\"), new JValue(pathString));\n"
         "        HandleException();\n"
         "        if (asset == null || !asset.Valid())\n"
@@ -289,10 +358,10 @@ def patch_lemon070_jni_and_asset_manager(root: Path) -> None:
         "        HandleException();\n"
         "        if (getAssetsId.Handle == IntPtr.Zero)\n"
         "            return;\n\n"
-        "        JObject assetManagerObj = JNI.CallObjectMethod<JObject>(contextObj, getAssetsId);\n"
+        "        using JObject assetManagerObj = JNI.CallObjectMethod<JObject>(contextObj, getAssetsId);\n"
         "        HandleException();\n"
         "        if (assetManagerObj != null && assetManagerObj.Valid())\n"
-        "            assetManager = assetManagerObj;\n"
+        "            assetManager = JNI.NewGlobalRef<JObject>(assetManagerObj);\n"
         "    }",
         "APKAssetManager.cs TryGetAndroidContext fallback",
     )
@@ -314,6 +383,7 @@ def write_early_crash_c_helper(root: Path) -> None:
 #include <unistd.h>
 
 static char g_internal_log_path[512] = "/data/local/tmp/lemon_early_crash.log";
+static char g_last_checkpoint[256] = "none";
 static int g_handlers_installed = 0;
 
 static struct sigaction g_old_sigsegv;
@@ -375,11 +445,11 @@ static void crash_signal_handler(int sig, siginfo_t *info, void *uctx) {
         off_lr = (uintptr_t)lr - (uintptr_t)dl_lr.dli_fbase;
     }
 
-    char buf[1024];
+    char buf[1280];
     snprintf(
         buf,
         sizeof(buf),
-        "[MelonLoader073][FATAL_SIGNAL] %s (%d) code=%d fault=0x%lx pc=0x%llx (%s+0x%lx) lr=0x%llx (%s+0x%lx) sp=0x%llx",
+        "[MelonLoader073][FATAL_SIGNAL] %s (%d) code=%d fault=0x%lx pc=0x%llx (%s+0x%lx) lr=0x%llx (%s+0x%lx) sp=0x%llx last=[%s]",
         sig_name(sig),
         sig,
         code,
@@ -390,7 +460,8 @@ static void crash_signal_handler(int sig, siginfo_t *info, void *uctx) {
         (unsigned long long)lr,
         mod_lr,
         (unsigned long)off_lr,
-        (unsigned long long)sp
+        (unsigned long long)sp,
+        g_last_checkpoint
     );
 
     __android_log_write(ANDROID_LOG_FATAL, "LemonEarly", buf);
@@ -439,6 +510,7 @@ void lemon_install_signal_handlers(const char *internal_log_path) {
 
 void lemon_early_log_write(const char *internal_path, const char *external_path, const char *line, int prio) {
     if (!line) return;
+    snprintf(g_last_checkpoint, sizeof(g_last_checkpoint), "%s", line);
     __android_log_write(prio, "LemonEarly", line);
     __android_log_write(prio, "MelonLoader", line);
     if (internal_path && internal_path[0]) {
@@ -903,27 +975,34 @@ internal static class StdRedirect
 
         Thread logThread = new(() =>
         {
-            byte[] buffer = new byte[1024];
-            while (true)
+            try
             {
-                Array.Clear(buffer, 0, buffer.Length);
-                IntPtr result = fgets(buffer, buffer.Length, inputFile);
-                if (result == IntPtr.Zero)
-                    break;
-
-                int zeroIdx = Array.IndexOf(buffer, (byte)0);
-                int len = zeroIdx >= 0 ? zeroIdx : buffer.Length;
-                string logMsg = Encoding.UTF8.GetString(buffer, 0, len).TrimEnd('\\n', '\\r');
-                if (!string.IsNullOrEmpty(logMsg))
+                byte[] buffer = new byte[1024];
+                while (true)
                 {
-                    __android_log_write(3, tag, logMsg);
-                    if (logMsg.Contains("error", StringComparison.OrdinalIgnoreCase) ||
-                        logMsg.Contains("exception", StringComparison.OrdinalIgnoreCase) ||
-                        logMsg.Contains("fail", StringComparison.OrdinalIgnoreCase))
+                    Array.Clear(buffer, 0, buffer.Length);
+                    IntPtr result = fgets(buffer, buffer.Length, inputFile);
+                    if (result == IntPtr.Zero)
+                        break;
+
+                    int zeroIdx = Array.IndexOf(buffer, (byte)0);
+                    int len = zeroIdx >= 0 ? zeroIdx : buffer.Length;
+                    string logMsg = Encoding.UTF8.GetString(buffer, 0, len).TrimEnd('\\n', '\\r');
+                    if (!string.IsNullOrEmpty(logMsg))
                     {
-                        EarlyLog.Checkpoint("corehost", logMsg);
+                        __android_log_write(3, tag, logMsg);
+                        if (logMsg.Contains("error", StringComparison.OrdinalIgnoreCase) ||
+                            logMsg.Contains("exception", StringComparison.OrdinalIgnoreCase) ||
+                            logMsg.Contains("fail", StringComparison.OrdinalIgnoreCase))
+                        {
+                            EarlyLog.Checkpoint("corehost", logMsg);
+                        }
                     }
                 }
+            }
+            catch (Exception ex)
+            {
+                EarlyLog.Checkpoint("stdredirect", $"WARN thread stopped: {ex.Message}");
             }
         });
 
@@ -1666,6 +1745,12 @@ internal delegate nint GetJavaVMFn();
     msr_text = msr_path.read_text(encoding="utf-8")
     msr_text = replace_once(
         msr_text,
+        "        private static bool _runtimeInitialised;\n\n#if LINUX || OSX\n        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]\n#endif",
+        "        private static bool _runtimeInitialised;\n        private static readonly object _initLock = new();\n\n#if LINUX || OSX || ANDROID\n        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]\n#endif",
+        "ModuleSymbolRedirect.cs DetourFn ANDROID + initLock",
+    )
+    msr_text = replace_once(
+        msr_text,
         "#if LINUX || OSX\n            PltHook.InstallHooks\n            ([\n                (\"dlsym\", detourPtr)\n            ]);\n#endif",
         "#if LINUX || OSX || ANDROID\n            PltHook.InstallHooks\n            ([\n                (\"dlsym\", detourPtr)\n            ]);\n#endif",
         "ModuleSymbolRedirect.cs Attach ANDROID",
@@ -1680,7 +1765,15 @@ internal delegate nint GetJavaVMFn();
         msr_text,
         "            if (!MonoHandler.SymbolRedirects.TryGetValue(symbolName, out var redirect)\n"
         "                && !Il2CppHandler.SymbolRedirects.TryGetValue(symbolName, out redirect))\n"
-        "                return originalSymbolAddress;",
+        "                return originalSymbolAddress;\n\n"
+        "            if (!_runtimeInitialised)\n"
+        "            {\n"
+        "                _runtimeInitialised = true;\n"
+        "                MelonDebug.Log(\"Initializing Runtime\");\n"
+        "                redirect.InitMethod(handle);\n"
+        "                if (!LoaderConfig.Current.Loader.CapturePlayerLogs)\n"
+        "                    ConsoleHandler.ResetHandles();\n"
+        "            }",
         "            if (!MonoHandler.SymbolRedirects.TryGetValue(symbolName, out var redirect)\n"
         "                && !Il2CppHandler.SymbolRedirects.TryGetValue(symbolName, out redirect))\n"
         "                return originalSymbolAddress;\n\n"
@@ -1691,7 +1784,18 @@ internal delegate nint GetJavaVMFn();
         "                return originalSymbolAddress;\n"
         "            }\n"
         "            Proxy.Android.EarlyLog.Checkpoint(\"dlsym\", $\"Redirecting {symbolName} original=0x{originalSymbolAddress:X}\");\n"
-        "#endif",
+        "#endif\n\n"
+        "            lock (_initLock)\n"
+        "            {\n"
+        "                if (!_runtimeInitialised)\n"
+        "                {\n"
+        "                    _runtimeInitialised = true;\n"
+        "                    MelonDebug.Log(\"Initializing Runtime\");\n"
+        "                    redirect.InitMethod(handle);\n"
+        "                    if (!LoaderConfig.Current.Loader.CapturePlayerLogs)\n"
+        "                        ConsoleHandler.ResetHandles();\n"
+        "                }\n"
+        "            }",
         "ModuleSymbolRedirect.cs SymbolDetour ANDROID",
     )
     msr_text = replace_once(
