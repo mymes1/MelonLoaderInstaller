@@ -24,7 +24,7 @@ jobs:
           chmod +x RepairPatches/build_lemon_repaired.sh
           set -o pipefail
           if ! bash RepairPatches/build_lemon_repaired.sh "$RUNNER_TEMP/lemon_build" "$GITHUB_WORKSPACE/melon_data_repaired.zip" > "$RUNNER_TEMP/build.log" 2>&1; then
-            MSG="$( (grep -iE "error|fatal|undefined symbol|MSB[0-9]+" "$RUNNER_TEMP/build.log" || tail -n 30 "$RUNNER_TEMP/build.log") | tail -n 25 | tr '\n' ' ' | cut -c 1-3500 )"
+            MSG="$( (grep -iE ": error |error [A-Z0-9]+:|fatal error|undefined symbol|ld\.lld:|clang:|ERROR:" "$RUNNER_TEMP/build.log" || tail -n 30 "$RUNNER_TEMP/build.log") | tail -n 25 | tr '\n' ' ' | cut -c 1-3500 )"
             echo "::error::$MSG"
             cat "$RUNNER_TEMP/build.log"
             exit 1
