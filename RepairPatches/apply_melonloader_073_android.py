@@ -3887,7 +3887,7 @@ namespace MelonLoader.Il2CppAssemblyGenerator.Packages
         interop_text = replace_once(
             interop_text,
             "            //inputAssemblies.ForEach(a => a.Dispose());",
-            "#if ANDROID\n            try\n            {\n                foreach (var a in inputAssemblies) a.ManifestModule?.Dispose();\n                resolver.Dispose();\n                inputAssemblies.Clear();\n                GC.Collect();\n                GC.WaitForPendingFinalizers();\n                GC.Collect();\n            }\n            catch { }\n#endif",
+            "#if ANDROID\n            try\n            {\n                resolver.Dispose();\n                inputAssemblies.Clear();\n                GC.Collect();\n                GC.WaitForPendingFinalizers();\n                GC.Collect();\n            }\n            catch { }\n#endif",
             "Il2CppInterop.cs Android cleanup + GC",
         )
         write_utf8(interop_cs_path, interop_text)
