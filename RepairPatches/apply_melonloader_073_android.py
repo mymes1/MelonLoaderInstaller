@@ -1976,8 +1976,18 @@ def patch_il2cpp_assembly_generator(root: Path) -> None:
     ag_core_text = replace_once(
         ag_core_text,
         "using System.IO;\nusing System.Net.Http;",
-        "using System.IO;\nusing System.IO.Compression;\nusing System.Linq;\nusing System.Net;\nusing System.Net.Http;\n#if ANDROID\nusing MelonLoader.Java;\n#endif",
+        "using System;\nusing System.IO;\nusing System.IO.Compression;\nusing System.Linq;\nusing System.Net;\nusing System.Net.Http;\n#if ANDROID\nusing MelonLoader.Java;\n#endif",
         "Il2CppAssemblyGenerator Core.cs usings",
+    )
+    ag_core_text = replace_once(
+        ag_core_text,
+        "            Cpp2IL cpp2IL_netcore = new Cpp2IL();\n"
+        "            if (MelonUtils.IsWindows\n"
+        "                && (cpp2IL_netcore.VersionSem < Cpp2IL.NetCoreMinVersion))",
+        "            Packages.Cpp2IL cpp2IL_netcore = new Packages.Cpp2IL();\n"
+        "            if (MelonUtils.IsWindows\n"
+        "                && (cpp2IL_netcore.VersionSem < Packages.Cpp2IL.NetCoreMinVersion))",
+        "Il2CppAssemblyGenerator Core.cs qualify Packages.Cpp2IL",
     )
     ag_core_text = replace_once(
         ag_core_text,
@@ -2105,10 +2115,10 @@ namespace MelonLoader.Il2CppAssemblyGenerator.Packages
 
         internal override bool Execute()
         {
-            Cpp2IL.Core.Logging.Logger.InfoLog += (l, s) => Core.Logger.Msg($"[{s}] {l.TrimEnd('\\n')}");
-            Cpp2IL.Core.Logging.Logger.WarningLog += (l, s) => Core.Logger.Warning($"[{s}] {l.TrimEnd('\\n')}");
-            Cpp2IL.Core.Logging.Logger.ErrorLog += (l, s) => Core.Logger.Error($"[{s}] {l.TrimEnd('\\n')}");
-            Cpp2IL.Core.Logging.Logger.VerboseLog += (l, s) => { if (MelonDebug.IsEnabled()) Core.Logger.Msg($"[{s}] {l.TrimEnd('\\n')}"); };
+            global::Cpp2IL.Core.Logging.Logger.InfoLog += (l, s) => Core.Logger.Msg($"[{s}] {l.TrimEnd('\\n')}");
+            global::Cpp2IL.Core.Logging.Logger.WarningLog += (l, s) => Core.Logger.Warning($"[{s}] {l.TrimEnd('\\n')}");
+            global::Cpp2IL.Core.Logging.Logger.ErrorLog += (l, s) => Core.Logger.Error($"[{s}] {l.TrimEnd('\\n')}");
+            global::Cpp2IL.Core.Logging.Logger.VerboseLog += (l, s) => { if (MelonDebug.IsEnabled()) Core.Logger.Msg($"[{s}] {l.TrimEnd('\\n')}"); };
 
             byte[] mdData = APKAssetManager.GetAssetBytes("bin/Data/Managed/Metadata/global-metadata.dat");
             string mdPath = Path.Combine(Core.BasePath, "global-metadata.dat");
