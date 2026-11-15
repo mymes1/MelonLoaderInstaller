@@ -514,11 +514,11 @@ internal static partial class EarlyLog
 
     public static string Stage { get; private set; } = "full";
 
-    [DllImport("*", EntryPoint = "lemon_install_signal_handlers", StringMarshalling = StringMarshalling.Utf8)]
-    private static extern void InstallSignalHandlersNative(string internalLogPath);
+    [LibraryImport("*", EntryPoint = "lemon_install_signal_handlers", StringMarshalling = StringMarshalling.Utf8)]
+    private static partial void InstallSignalHandlersNative(string internalLogPath);
 
-    [DllImport("*", EntryPoint = "lemon_early_log_write", StringMarshalling = StringMarshalling.Utf8)]
-    private static extern void WriteEarlyLogNative(string? internalPath, string? externalPath, string line, int prio);
+    [LibraryImport("*", EntryPoint = "lemon_early_log_write", StringMarshalling = StringMarshalling.Utf8)]
+    private static partial void WriteEarlyLogNative(string? internalPath, string? externalPath, string line, int prio);
 
     public static string? ReadPackageNameFromCmdline()
     {
