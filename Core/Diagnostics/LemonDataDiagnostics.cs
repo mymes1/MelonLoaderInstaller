@@ -437,6 +437,19 @@ public static class LemonDataDiagnostics
                 hasProxyEarlyLog
                     ? "libmain.so includes early checkpoint logging, libDir-aware dlopen, and safe load ordering."
                     : "libmain.so lacks early checkpoint logging and stage isolation."));
+
+            bool needsSharedLibCxx = mainElf.NeededLibraries.Any(lib =>
+                lib.Equals("libc++_shared.so", StringComparison.OrdinalIgnoreCase));
+            report.Checks.Add(new DiagnosticCheck(
+                "MAIN_STATIC_LIBCXX",
+                "libmain.so",
+                needsSharedLibCxx ? DiagnosticSeverity.Critical : DiagnosticSeverity.Pass,
+                needsSharedLibCxx
+                    ? "libmain.so dynamically depends on libc++_shared.so (DT_NEEDED)."
+                    : "libmain.so has no libc++_shared.so dependency (Android self-contained).",
+                needsSharedLibCxx
+                    ? "Unity Android APKs do not bundle libc++_shared.so, causing UnsatisfiedLinkError at startup. Link with -static-libstdc++."
+                    : null));
         }
 
         byte[]? bootstrapBytes = readBytes(nativePrefix + "libBootstrap.so");

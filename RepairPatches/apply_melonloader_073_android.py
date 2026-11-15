@@ -368,7 +368,7 @@ def patch_bootstrap_targets_and_csproj(root: Path) -> None:
     </PropertyGroup>
 
     <PropertyGroup Condition="$(IsAndroid) == 'true'">
-        <CppCompilerAndLinker Condition="$(IsWindowsHost) != 'true'">$(ANDROID_NDK_ROOT)/toolchains/llvm/prebuilt/$(NdkHost)/bin/clang</CppCompilerAndLinker>
+        <CppCompilerAndLinker Condition="$(IsWindowsHost) != 'true'">$(ANDROID_NDK_ROOT)/toolchains/llvm/prebuilt/$(NdkHost)/bin/clang++</CppCompilerAndLinker>
         <ObjCopyName Condition="$(IsWindowsHost) != 'true'">$(ANDROID_NDK_ROOT)/toolchains/llvm/prebuilt/$(NdkHost)/bin/llvm-objcopy</ObjCopyName>
         <CppCompilerAndLinker Condition="$(IsWindowsHost) == 'true'">android_clang.cmd</CppCompilerAndLinker>
         <ObjCopyName Condition="$(IsWindowsHost) == 'true'">android_llvm-objcopy.cmd</ObjCopyName>
@@ -378,6 +378,7 @@ def patch_bootstrap_targets_and_csproj(root: Path) -> None:
         <LinkerArg Include="-z noexecstack" />
         <LinkerArg Include="-Wl,-z,max-page-size=16384" />
         <LinkerArg Include="-Wl,--allow-multiple-definition" />
+        <LinkerArg Include="-static-libstdc++" />
         <LinkerArg Include="-llog" />
         <LinkerArg Include="-ldl" />
         <LinkerArg Condition="$(RuntimeIdentifier.ToLower().EndsWith('-x64'))" Include="--target=x86_64-linux-android21" />
@@ -397,7 +398,7 @@ def patch_bootstrap_targets_and_csproj(root: Path) -> None:
             <NdkHostBin Condition="$(IsWindowsHost) == 'true'">$(ANDROID_NDK_ROOT)\\toolchains\\llvm\\prebuilt\\$(NdkHost)\\bin\\</NdkHostBin>
             <NdkHostBin Condition="$(IsWindowsHost) != 'true'">$(ANDROID_NDK_ROOT)/toolchains/llvm/prebuilt/$(NdkHost)/bin/</NdkHostBin>
         </PropertyGroup>
-        <WriteLinesToFile Condition="$(IsWindowsHost) == 'true'" File="android_clang.cmd" Lines="&quot;$(NdkHostBin)clang.exe&quot; %*" Overwrite="true" />
+        <WriteLinesToFile Condition="$(IsWindowsHost) == 'true'" File="android_clang.cmd" Lines="&quot;$(NdkHostBin)clang++.exe&quot; %*" Overwrite="true" />
         <WriteLinesToFile Condition="$(IsWindowsHost) == 'true'" File="android_llvm-objcopy.cmd" Lines="&quot;$(NdkHostBin)llvm-objcopy.exe&quot; %*" Overwrite="true" />
     </Target>
 
@@ -464,7 +465,7 @@ def patch_bootstrap_targets_and_csproj(root: Path) -> None:
         "    </PropertyGroup>\n\n"
         "    <PropertyGroup Condition=\"'$(RuntimeIdentifier.StartsWith(`linux-bionic-`))' == 'true'\">\n"
         "        <ExportsFile>androidexports.def</ExportsFile>\n"
-        "        <LinkStandardCPlusPlusLibrary>true</LinkStandardCPlusPlusLibrary>\n"
+        "        <LinkStandardCPlusPlusLibrary>false</LinkStandardCPlusPlusLibrary>\n"
         "    </PropertyGroup>",
         "Bootstrap csproj ExportsFile",
     )

@@ -378,6 +378,8 @@ public sealed class InstallerTests : IDisposable
             Assert.DoesNotContain("libdobby.so", postApk.Arm64Libraries.Keys);
             Assert.Contains("GetJavaVM", postApk.Arm64Libraries["libmain.so"].ExportedSymbols);
             Assert.Contains("GetLoaderConfig", postApk.Arm64Libraries["libmain.so"].ExportedSymbols);
+            Assert.DoesNotContain("libc++_shared.so", postApk.Arm64Libraries["libmain.so"].NeededLibraries, StringComparer.OrdinalIgnoreCase);
+            Assert.Contains(diag.Checks, c => c.Id == "MAIN_STATIC_LIBCXX" && c.Severity == Core.Diagnostics.DiagnosticSeverity.Pass);
             Assert.Contains(diag.Checks, c => c.Id == "CPP2IL_CORE_DLL" && c.Severity == Core.Diagnostics.DiagnosticSeverity.Pass);
         }
     }

@@ -184,6 +184,16 @@ cp -f "$LIBMAIN_CANDIDATE" "$STAGE/native/libmain.so"
 echo "=== Verifying built ARM64 NativeAOT libmain.so ==="
 readelf -h -lW -d "$STAGE/native/libmain.so" | grep -E "Machine|LOAD|NEEDED|SONAME"
 readelf -Ws "$STAGE/native/libmain.so" | grep -E "JNI_OnLoad|GetJavaVM|GetLoaderConfig|LogMsg" || true
+if readelf -d "$STAGE/native/libmain.so" | grep -q "libc++_shared.so"; then
+  echo "ERROR: libmain.so must NOT dynamically depend on libc++_shared.so (not bundled in Android Unity APKs)." >&2
+  exit 1
+fi
+for rt_so in "$STAGE/dotnet/shared/Microsoft.NETCore.App/8.0.6/"*.so; do
+  if readelf -d "$rt_so" 2>/dev/null | grep -q "libc++_shared.so"; then
+    echo "ERROR: $rt_so dynamically depends on libc++_shared.so." >&2
+    exit 1
+  fi
+done
 
 # Build manifest with exact source commits & SHA-256 checksums
 ML_SHA="$(git -C "$ML_DIR" rev-parse HEAD)"
