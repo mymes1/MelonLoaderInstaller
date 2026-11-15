@@ -41,7 +41,7 @@ fi
 if [ ! -d "$ML_DIR/External/MonoMod/.git" ]; then
   echo "      Cloning LemonLoader/MonoMod (ARM64 .NET 8 FixupPrecode + AndroidSystem)..."
   mkdir -p "$ML_DIR/External"
-  git clone --depth 1 https://github.com/LemonLoader/MonoMod.git "$ML_DIR/External/MonoMod"
+  git clone --depth 1 --recurse-submodules --shallow-submodules https://github.com/LemonLoader/MonoMod.git "$ML_DIR/External/MonoMod"
 fi
 
 if [ ! -d "$ML_DIR/External/HarmonyX/.git" ]; then
