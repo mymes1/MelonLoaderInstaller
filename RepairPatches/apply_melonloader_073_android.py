@@ -124,7 +124,7 @@ def patch_lemon070_jni_and_asset_manager(root: Path) -> None:
         "            }\n\n"
         "            IntPtr refPtr = IntPtr.Zero;\n"
         "            res = VM->Functions->AttachCurrentThread(VM, out JNIEnv* localEnv, ref refPtr);\n"
-        "            if (res == Result.OK && localEnv != null)\n"
+        "            if ((int)res == 0 && localEnv != null)\n"
         "                env = localEnv;\n"
         "        }\n"
         "    }",
