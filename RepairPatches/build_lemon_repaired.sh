@@ -55,17 +55,31 @@ echo "      Using ANDROID_NDK_ROOT=$ANDROID_NDK_ROOT"
 
 echo "[4/7] Building MelonLoader v0.7.3 managed assemblies (net8.0 Release, AndroidBuild=true)..."
 pushd "$ML_DIR" >/dev/null
+cat > "$ML_DIR/global.json" <<'JSON'
+{
+  "sdk": {
+    "version": "9.0.0",
+    "rollForward": "latestMinor",
+    "allowPrerelease": false
+  }
+}
+JSON
+
 SOL_DIR="$ML_DIR/"
-COMMON_PROPS=(
-  "-c" "Release"
+RESTORE_PROPS=(
+  "-p:Configuration=Release"
   "-p:AndroidBuild=true"
   "-p:ForceRID=linux-bionic-arm64"
   "-p:SolutionDir=$SOL_DIR"
   "-p:Version=0.7.3"
 )
+BUILD_PROPS=(
+  "-c" "Release"
+  "${RESTORE_PROPS[@]}"
+)
 
-dotnet restore MelonLoader/MelonLoader.csproj "${COMMON_PROPS[@]}"
-dotnet build --no-restore MelonLoader/MelonLoader.csproj -f net8.0 "${COMMON_PROPS[@]}"
+dotnet restore MelonLoader/MelonLoader.csproj "${RESTORE_PROPS[@]}"
+dotnet build --no-restore MelonLoader/MelonLoader.csproj -f net8.0 "${BUILD_PROPS[@]}"
 
 for proj in \
   MelonLoader.NativeHost/MelonLoader.NativeHost.csproj \
@@ -73,8 +87,8 @@ for proj in \
   Dependencies/Il2CppAssemblyGenerator/Il2CppAssemblyGenerator.csproj \
   UnityUtilities/UnityEngine.Il2CppAssetBundleManager/UnityEngine.Il2CppAssetBundleManager.csproj \
   UnityUtilities/UnityEngine.Il2CppImageConversionManager/UnityEngine.Il2CppImageConversionManager.csproj; do
-  dotnet restore "$proj" "${COMMON_PROPS[@]}"
-  dotnet build --no-restore "$proj" -f net8.0 "${COMMON_PROPS[@]}"
+  dotnet restore "$proj" "${RESTORE_PROPS[@]}"
+  dotnet build --no-restore "$proj" -f net8.0 "${BUILD_PROPS[@]}"
 done
 
 echo "[5/7] Publishing NativeAOT MelonLoader.Bootstrap (libmain.so, linux-bionic-arm64 via .NET 9 + NDK)..."
