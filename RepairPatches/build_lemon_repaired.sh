@@ -38,6 +38,24 @@ if [ ! -f "$ML_DIR/External/Cpp2IL/Cpp2IL.Core/Cpp2IL.Core.csproj" ]; then
   git clone --depth 1 --branch 2022.1.0-pre-release.21 https://github.com/SamboyCoding/Cpp2IL.git "$ML_DIR/External/Cpp2IL"
 fi
 
+if [ ! -d "$ML_DIR/External/MonoMod/.git" ]; then
+  echo "      Cloning LemonLoader/MonoMod (ARM64 .NET 8 FixupPrecode + AndroidSystem)..."
+  mkdir -p "$ML_DIR/External"
+  git clone --depth 1 https://github.com/LemonLoader/MonoMod.git "$ML_DIR/External/MonoMod"
+fi
+
+if [ ! -d "$ML_DIR/External/HarmonyX/.git" ]; then
+  echo "      Cloning LemonLoader/HarmonyX (MonoMod 25.x)..."
+  mkdir -p "$ML_DIR/External"
+  git clone --depth 1 https://github.com/LemonLoader/HarmonyX.git "$ML_DIR/External/HarmonyX"
+fi
+
+if [ ! -d "$ML_DIR/External/Il2CppInterop/.git" ]; then
+  echo "      Cloning LemonLoader/Il2CppInterop (Android ARM64 Disarm + libil2cpp.so)..."
+  mkdir -p "$ML_DIR/External"
+  git clone --depth 1 https://github.com/LemonLoader/Il2CppInterop.git "$ML_DIR/External/Il2CppInterop"
+fi
+
 echo "[2/7] Applying LavaGang/MelonLoader v0.7.3 Open-Beta Android ARM64 port & crash/stage diagnostics..."
 python3 "$SCRIPT_DIR/apply_melonloader_073_android.py" "$ML_DIR" "$LEMON_070_DIR"
 
@@ -53,8 +71,21 @@ fi
 export ANDROID_NDK_ROOT="$NDK_DIR"
 echo "      Using ANDROID_NDK_ROOT=$ANDROID_NDK_ROOT"
 
-echo "[4/7] Building MelonLoader v0.7.3 managed assemblies (net8.0 Release, AndroidBuild=true)..."
+echo "[4/7] Building LemonLoader/{MonoMod,HarmonyX,Il2CppInterop} + MelonLoader v0.7.3 (net8.0 Release, AndroidBuild=true)..."
 pushd "$ML_DIR" >/dev/null
+
+# Build LemonLoader/MonoMod (25.1.2, ARM64 .NET 8 FixupPrecode + AndroidSystem) for netstandard2.0, net6.0, net8.0
+dotnet restore External/MonoMod/src/MonoMod.RuntimeDetour/MonoMod.RuntimeDetour.csproj
+dotnet restore External/MonoMod/src/MonoMod.RuntimeDetour.HookGen/MonoMod.RuntimeDetour.HookGen.csproj
+for tfm in netstandard2.0 net6.0 net8.0; do
+  dotnet build --no-restore External/MonoMod/src/MonoMod.RuntimeDetour/MonoMod.RuntimeDetour.csproj -c Release -f "$tfm"
+done
+dotnet build --no-restore External/MonoMod/src/MonoMod.RuntimeDetour.HookGen/MonoMod.RuntimeDetour.HookGen.csproj -c Release -f net8.0
+
+# Build LemonLoader/HarmonyX (netstandard2.0 against LemonLoader/MonoMod)
+dotnet restore External/HarmonyX/Harmony/Harmony.csproj
+dotnet build --no-restore External/HarmonyX/Harmony/Harmony.csproj -c Release -f netstandard2.0
+
 cat > "$ML_DIR/global.json" <<'JSON'
 {
   "sdk": {
@@ -126,6 +157,9 @@ OUT_ROOT="$ML_DIR/Output/Release/linux-bionic-arm64"
 
 # Copy managed MelonLoader v0.7.3 outputs into MelonLoader/net6/ (MelonEnvironment.OurRuntimeName = net6)
 cp -a "$OUT_ROOT/MelonLoader/net8.0/." "$STAGE/MelonLoader/net6/"
+for mm in MonoMod.Backports MonoMod.Core MonoMod.ILHelpers MonoMod.RuntimeDetour MonoMod.RuntimeDetour.HookGen MonoMod.Utils; do
+  cp -f "$ML_DIR/External/MonoMod/artifacts/bin/$mm/release_net8.0/$mm.dll" "$STAGE/MelonLoader/net6/$mm.dll"
+done
 cp -a "$OUT_ROOT/MelonLoader/Dependencies/SupportModules/." "$STAGE/MelonLoader/Dependencies/SupportModules/"
 cp -a "$OUT_ROOT/MelonLoader/Dependencies/Il2CppAssemblyGenerator/." "$STAGE/MelonLoader/Dependencies/Il2CppAssemblyGenerator/"
 
@@ -200,14 +234,17 @@ ML_SHA="$(git -C "$ML_DIR" rev-parse HEAD)"
 LEMON_070_SHA="$(git -C "$LEMON_070_DIR" rev-parse HEAD)"
 LEMON_06X_SHA="$(git -C "$LEMON_06X_DIR" rev-parse HEAD)"
 CPP2IL_SHA="$(git -C "$ML_DIR/External/Cpp2IL" rev-parse HEAD)"
+MONOMOD_SHA="$(git -C "$ML_DIR/External/MonoMod" rev-parse HEAD)"
+HARMONYX_SHA="$(git -C "$ML_DIR/External/HarmonyX" rev-parse HEAD)"
+IL2CPPINTEROP_SHA="$(git -C "$ML_DIR/External/Il2CppInterop" rev-parse HEAD)"
 
-python3 - "$STAGE" "$ML_SHA" "$LEMON_070_SHA" "$LEMON_06X_SHA" "$CPP2IL_SHA" <<'PYEOF'
+python3 - "$STAGE" "$ML_SHA" "$LEMON_070_SHA" "$LEMON_06X_SHA" "$CPP2IL_SHA" "$MONOMOD_SHA" "$HARMONYX_SHA" "$IL2CPPINTEROP_SHA" <<'PYEOF'
 import hashlib, json, sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 stage = Path(sys.argv[1])
-ml_sha, lemon_070_sha, lemon_06x_sha, cpp2il_sha = sys.argv[2:6]
+ml_sha, lemon_070_sha, lemon_06x_sha, cpp2il_sha, monomod_sha, harmonyx_sha, il2cppinterop_sha = sys.argv[2:9]
 
 key_files = [
     "MelonLoader/net6/MelonLoader.dll",
@@ -216,7 +253,10 @@ key_files = [
     "MelonLoader/net6/Il2CppInterop.Common.dll",
     "MelonLoader/net6/Il2CppInterop.Generator.dll",
     "MelonLoader/net6/Il2CppInterop.HarmonySupport.dll",
+    "MelonLoader/net6/Disarm.dll",
     "MelonLoader/net6/0Harmony.dll",
+    "MelonLoader/net6/MonoMod.Core.dll",
+    "MelonLoader/net6/MonoMod.Utils.dll",
     "MelonLoader/net6/MonoMod.RuntimeDetour.dll",
     "MelonLoader/Dependencies/SupportModules/Il2Cpp.dll",
     "MelonLoader/Dependencies/Il2CppAssemblyGenerator/Il2CppAssemblyGenerator.dll",
@@ -236,14 +276,18 @@ manifest = {
     "repairedAtUtc": datetime.now(timezone.utc).isoformat(),
     "fixesApplied": [
         "MelonLoaderV073OpenBetaAndroidPort: LavaGang/MelonLoader v0.7.3 built for linux-bionic-arm64 with LemonLoader 0.7.0 NativeAOT single-libmain.so bootstrap (.NET 9 + NDK)",
+        "LemonLoaderAndroidInteropAndDetours: LemonLoader/Il2CppInterop (ARM64 Disarm + libil2cpp.so), LemonLoader/MonoMod 25.1.2 (ARM64 .NET 8 FixupPrecode + mprotect + icache flush), and LemonLoader/HarmonyX 2.13.0",
         "InProcessCpp2IL21: SamboyCoding/Cpp2IL 2022.1.0-pre-release.21 + AssetRipper.Primitives 3.2.0 + AsmResolver.DotNet 6.0.0-beta.5 aligned with MelonLoader v0.7.3",
-        "AndroidNativeFixes: 16KB PT_LOAD alignment, SA_SIGINFO SIGSEGV/SIGABRT/SIGBUS handler, crash-surviving lemon_early_crash.log, libDir-aware dlopen, Android SDK>=30 permission guard, DOTNET_ROOT + SSL_CERT_DIR, and assets/lemon_stage.txt stage isolation"
+        "AndroidNativeFixes: 16KB PT_LOAD alignment, SA_SIGINFO SIGSEGV/SIGABRT/SIGBUS handler, crash-surviving lemon_early_crash.log, libDir-aware dlopen, Android SDK>=30 permission guard, DOTNET_ROOT + DOTNET_EnableWriteXorExecute=0 + SSL_CERT_DIR, and assets/lemon_stage.txt stage isolation"
     ],
     "sourceCommits": {
         "LavaGang/MelonLoader@v0.7.3": ml_sha,
         "LemonLoader/MelonLoader@0.7.0": lemon_070_sha,
         "LemonLoader/MelonLoader@0.6.X": lemon_06x_sha,
-        "SamboyCoding/Cpp2IL@2022.1.0-pre-release.21": cpp2il_sha
+        "SamboyCoding/Cpp2IL@2022.1.0-pre-release.21": cpp2il_sha,
+        "LemonLoader/MonoMod": monomod_sha,
+        "LemonLoader/HarmonyX": harmonyx_sha,
+        "LemonLoader/Il2CppInterop": il2cppinterop_sha
     },
     "sha256": hashes
 }

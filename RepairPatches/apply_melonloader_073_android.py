@@ -1328,6 +1328,12 @@ void lemon_early_log_write(const char *internal_path, const char *external_path,
         append_file_line(external_path, line);
     }
 }
+
+void lemon_clear_icache(void *start, void *end) {
+    if (start && end && end > start) {
+        __builtin___clear_cache((char *)start, (char *)end);
+    }
+}
 """
     write_utf8(c_path, c_code)
     print(f"[wrote] {c_path}")
@@ -1559,6 +1565,7 @@ def patch_bootstrap_targets_and_csproj(root: Path) -> None:
         GetLoaderConfig;
         GetJavaVM;
         JNI_OnLoad;
+        lemon_clear_icache;
     local: *;
 };
 """
@@ -1756,17 +1763,15 @@ internal static class StdRedirect
     [DllImport("liblog.so", SetLastError = true)]
     private static extern int __android_log_write(int prio, string tag, string text);
 
+    private static int _corehostCheckpointCount;
+
     public static void RedirectStdErr()
     {
-        Environment.SetEnvironmentVariable("COREHOST_TRACE", "1");
-        Environment.SetEnvironmentVariable("COREHOST_TRACE_VERBOSITY", "3");
         RedirectStream(STDERR_FILENO, "MelonLoader");
     }
 
     public static void RedirectStdOut()
     {
-        Environment.SetEnvironmentVariable("COREHOST_TRACE", "1");
-        Environment.SetEnvironmentVariable("COREHOST_TRACE_VERBOSITY", "3");
         RedirectStream(STDOUT_FILENO, "MelonLoader");
     }
 
@@ -1799,9 +1804,10 @@ internal static class StdRedirect
                     if (!string.IsNullOrEmpty(logMsg))
                     {
                         __android_log_write(3, tag, logMsg);
-                        if (logMsg.Contains("error", StringComparison.OrdinalIgnoreCase) ||
+                        if ((logMsg.Contains("error", StringComparison.OrdinalIgnoreCase) ||
                             logMsg.Contains("exception", StringComparison.OrdinalIgnoreCase) ||
-                            logMsg.Contains("fail", StringComparison.OrdinalIgnoreCase))
+                            logMsg.Contains("fail", StringComparison.OrdinalIgnoreCase)) &&
+                            Interlocked.Increment(ref _corehostCheckpointCount) <= 20)
                         {
                             EarlyLog.Checkpoint("corehost", logMsg);
                         }
@@ -2057,9 +2063,10 @@ public static class AndroidBootstrap
 
         Environment.SetEnvironmentVariable("DOTNET_ROOT", DotnetDir);
         Environment.SetEnvironmentVariable("DOTNET_MULTILEVEL_LOOKUP", "0");
+        Environment.SetEnvironmentVariable("DOTNET_EnableWriteXorExecute", "0");
         Environment.SetEnvironmentVariable("SSL_CERT_DIR", "/system/etc/security/cacerts");
         Environment.SetEnvironmentVariable("SSL_CERT_FILE", "/system/etc/security/cacerts");
-        EarlyLog.Checkpoint("bootstrap", $"Env set DOTNET_ROOT={DotnetDir} SSL_CERT_DIR=/system/etc/security/cacerts");
+        EarlyLog.Checkpoint("bootstrap", $"Env set DOTNET_ROOT={DotnetDir} W^X=0 SSL_CERT_DIR=/system/etc/security/cacerts");
 
         EarlyLog.Checkpoint("bootstrap", "Calling MelonLoader.Bootstrap.Core.Init()");
         Core.Init();
@@ -3093,7 +3100,7 @@ internal static class Il2CppHandler
 def patch_managed_melonloader(root: Path) -> None:
     ml = root / "MelonLoader"
 
-    # 1. MelonLoader.csproj: support AndroidBuild (net8.0 + JNI + APKAssetManager)
+    # 1. MelonLoader.csproj: support AndroidBuild (net8.0 + JNI + APKAssetManager + LemonLoader/{MonoMod,HarmonyX,Il2CppInterop})
     csproj_path = ml / "MelonLoader.csproj"
     csproj_text = csproj_path.read_text(encoding="utf-8")
     csproj_text = replace_once(
@@ -3104,6 +3111,59 @@ def patch_managed_melonloader(root: Path) -> None:
         "        <CopyLocalLockFileAssemblies Condition=\"'$(AndroidBuild)' == 'true'\">true</CopyLocalLockFileAssemblies>\n"
         "        <GenerateRuntimeConfigurationFiles Condition=\"'$(AndroidBuild)' == 'true'\">true</GenerateRuntimeConfigurationFiles>",
         "MelonLoader.csproj AndroidBuild TargetFrameworks + CopyLocalLockFileAssemblies",
+    )
+    csproj_text = replace_once(
+        csproj_text,
+        "        <PackageReference Include=\"HarmonyX\" Version=\"$(HarmonyXVersion)\" />\n"
+        "        <PackageReference Include=\"Mono.Cecil\" Version=\"$(MonoCecilVersion)\" />\n"
+        "        <PackageReference Include=\"MonoMod\" Version=\"$(MonoModVersion)\" />\n"
+        "        <PackageReference Include=\"MonoMod.RuntimeDetour\" Version=\"$(MonoModVersion)\" />\n"
+        "        <PackageReference Include=\"MonoMod.Utils\" Version=\"$(MonoModVersion)\" />",
+        "        <PackageReference Include=\"HarmonyX\" Version=\"$(HarmonyXVersion)\" Condition=\"'$(AndroidBuild)' != 'true'\" />\n"
+        "        <PackageReference Include=\"Mono.Cecil\" Version=\"$(MonoCecilVersion)\" />\n"
+        "        <PackageReference Include=\"MonoMod\" Version=\"$(MonoModVersion)\" Condition=\"'$(AndroidBuild)' != 'true'\" />\n"
+        "        <PackageReference Include=\"MonoMod.RuntimeDetour\" Version=\"$(MonoModVersion)\" Condition=\"'$(AndroidBuild)' != 'true'\" />\n"
+        "        <PackageReference Include=\"MonoMod.Utils\" Version=\"$(MonoModVersion)\" Condition=\"'$(AndroidBuild)' != 'true'\" />\n"
+        "        <ProjectReference Include=\"..\\External\\HarmonyX\\Harmony\\Harmony.csproj\" Condition=\"'$(AndroidBuild)' == 'true'\" />",
+        "MelonLoader.csproj swap HarmonyX/MonoMod to LemonLoader forks on Android",
+    )
+    csproj_text = replace_once(
+        csproj_text,
+        "        <PackageReference Include=\"Iced\" Version=\"$(IcedVersion)\" />\n"
+        "        <PackageReference Include=\"Il2CppInterop.Common\" Version=\"$(Il2CppInteropVersion)\" />\n"
+        "        <PackageReference Include=\"Il2CppInterop.Runtime\" Version=\"$(Il2CppInteropVersion)\" />\n"
+        "        <PackageReference Include=\"Il2CppInterop.Generator\" Version=\"$(Il2CppInteropVersion)\" />\n"
+        "        <PackageReference Include=\"Il2CppInterop.HarmonySupport\" Version=\"$(Il2CppInteropVersion)\" />",
+        "        <PackageReference Include=\"Iced\" Version=\"$(IcedVersion)\" Condition=\"'$(AndroidBuild)' != 'true'\" />\n"
+        "        <PackageReference Include=\"Il2CppInterop.Common\" Version=\"$(Il2CppInteropVersion)\" Condition=\"'$(AndroidBuild)' != 'true'\" />\n"
+        "        <PackageReference Include=\"Il2CppInterop.Runtime\" Version=\"$(Il2CppInteropVersion)\" Condition=\"'$(AndroidBuild)' != 'true'\" />\n"
+        "        <PackageReference Include=\"Il2CppInterop.Generator\" Version=\"$(Il2CppInteropVersion)\" Condition=\"'$(AndroidBuild)' != 'true'\" />\n"
+        "        <PackageReference Include=\"Il2CppInterop.HarmonySupport\" Version=\"$(Il2CppInteropVersion)\" Condition=\"'$(AndroidBuild)' != 'true'\" />\n"
+        "    </ItemGroup>\n"
+        "    <ItemGroup Condition=\"'$(AndroidBuild)' == 'true'\">\n"
+        "        <ProjectReference Include=\"..\\External\\Il2CppInterop\\Il2CppInterop.Common\\Il2CppInterop.Common.csproj\" />\n"
+        "        <ProjectReference Include=\"..\\External\\Il2CppInterop\\Il2CppInterop.Runtime\\Il2CppInterop.Runtime.csproj\" />\n"
+        "        <ProjectReference Include=\"..\\External\\Il2CppInterop\\Il2CppInterop.Generator\\Il2CppInterop.Generator.csproj\" />\n"
+        "        <ProjectReference Include=\"..\\External\\Il2CppInterop\\Il2CppInterop.HarmonySupport\\Il2CppInterop.HarmonySupport.csproj\" />\n"
+        "        <Reference Include=\"MonoMod.Backports\">\n"
+        "            <HintPath>..\\External\\MonoMod\\artifacts\\bin\\MonoMod.Backports\\$(Configuration.ToLower())_net8.0\\MonoMod.Backports.dll</HintPath>\n"
+        "        </Reference>\n"
+        "        <Reference Include=\"MonoMod.Core\">\n"
+        "            <HintPath>..\\External\\MonoMod\\artifacts\\bin\\MonoMod.Core\\$(Configuration.ToLower())_net8.0\\MonoMod.Core.dll</HintPath>\n"
+        "        </Reference>\n"
+        "        <Reference Include=\"MonoMod.ILHelpers\">\n"
+        "            <HintPath>..\\External\\MonoMod\\artifacts\\bin\\MonoMod.ILHelpers\\$(Configuration.ToLower())_net8.0\\MonoMod.ILHelpers.dll</HintPath>\n"
+        "        </Reference>\n"
+        "        <Reference Include=\"MonoMod.RuntimeDetour\">\n"
+        "            <HintPath>..\\External\\MonoMod\\artifacts\\bin\\MonoMod.RuntimeDetour\\$(Configuration.ToLower())_net8.0\\MonoMod.RuntimeDetour.dll</HintPath>\n"
+        "        </Reference>\n"
+        "        <Reference Include=\"MonoMod.RuntimeDetour.HookGen\">\n"
+        "            <HintPath>..\\External\\MonoMod\\artifacts\\bin\\MonoMod.RuntimeDetour.HookGen\\$(Configuration.ToLower())_net8.0\\MonoMod.RuntimeDetour.HookGen.dll</HintPath>\n"
+        "        </Reference>\n"
+        "        <Reference Include=\"MonoMod.Utils\">\n"
+        "            <HintPath>..\\External\\MonoMod\\artifacts\\bin\\MonoMod.Utils\\$(Configuration.ToLower())_net8.0\\MonoMod.Utils.dll</HintPath>\n"
+        "        </Reference>",
+        "MelonLoader.csproj swap Il2CppInterop + MonoMod references on Android",
     )
     csproj_text = replace_once(
         csproj_text,
@@ -3476,7 +3536,7 @@ def patch_managed_melonloader(root: Path) -> None:
     )
     write_utf8(ui_path, ui_text)
 
-    # 9. Fixes/Il2CppInterop/Il2CppICallInjector.cs -> libil2cpp.so on Android
+    # 9. Fixes/Il2CppInterop/Il2CppICallInjector.cs -> libil2cpp.so + MonoMod 25.1.2 PlatformTriple on Android
     icall_path = ml / "Fixes/Il2CppInterop/Il2CppICallInjector.cs"
     icall_text = icall_path.read_text(encoding="utf-8")
     icall_text = replace_once(
@@ -3489,20 +3549,251 @@ def patch_managed_melonloader(root: Path) -> None:
         "#endif",
         "Il2CppICallInjector.cs libil2cpp.so on Android",
     )
+    icall_text = replace_once(
+        icall_text,
+        "            // Return the New Method\n"
+        "            MethodInfo newMethod = trampoline.Generate().Pin();\n"
+        "            return (patcher, trampoline, newMethod, newMethod.GetNativeStart());",
+        "#if ANDROID\n"
+        "            MethodInfo newMethod = trampoline.Generate();\n"
+        "            var triple = global::MonoMod.Core.Platforms.PlatformTriple.Current;\n"
+        "            using var pin = triple.PinMethodIfNeeded(newMethod);\n"
+        "            return (patcher, trampoline, newMethod, triple.Runtime.GetMethodEntryPoint(newMethod));\n"
+        "#else\n"
+        "            // Return the New Method\n"
+        "            MethodInfo newMethod = trampoline.Generate().Pin();\n"
+        "            return (patcher, trampoline, newMethod, newMethod.GetNativeStart());\n"
+        "#endif",
+        "Il2CppICallInjector.cs MonoMod 25.1.2 PlatformTriple entrypoint on Android",
+    )
     write_utf8(icall_path, icall_text)
 
-    # 10. Fixes/Il2CppInterop/Il2CppInteropInjectorHelpersSetupFix.cs -> remove GetFieldDefaultValueHook on Android
-    setup_fix_path = ml / "Fixes/Il2CppInterop/Il2CppInteropInjectorHelpersSetupFix.cs"
-    setup_fix_text = setup_fix_path.read_text(encoding="utf-8")
-    setup_fix_text = replace_once(
-        setup_fix_text,
-        "#if LINUX\n            instructions = RemoveField(\n                \"GetFieldDefaultValueHook\", _injectorType,\n                instructions);\n#endif",
-        "#if LINUX || ANDROID\n            instructions = RemoveField(\n                \"GetFieldDefaultValueHook\", _injectorType,\n                instructions);\n#endif",
-        "Il2CppInteropInjectorHelpersSetupFix.cs remove GetFieldDefaultValueHook on Android",
+    # 10. Fixes/Il2CppInterop/Il2CppInteropFixes.cs -> disable x86-only Iced DecoderForAddress/dead helpers on Android
+    interop_fixes_path = ml / "Fixes/Il2CppInterop/Il2CppInteropFixes.cs"
+    interop_fixes_text = interop_fixes_path.read_text(encoding="utf-8")
+    interop_fixes_text = replace_once(
+        interop_fixes_text,
+        "using Iced.Intel;\nusing Il2CppInterop.Common.XrefScans;\nusing FlowControl = Iced.Intel.FlowControl;",
+        "using Il2CppInterop.Common.XrefScans;\n#if !ANDROID\nusing Iced.Intel;\nusing FlowControl = Iced.Intel.FlowControl;\n#endif",
+        "Il2CppInteropFixes.cs guard Iced.Intel on Android",
     )
-    write_utf8(setup_fix_path, setup_fix_text)
+    interop_fixes_text = replace_once(
+        interop_fixes_text,
+        "                DecoderForAddress = typeof(XrefScanner).GetMethod(\"DecoderForAddress\", BindingFlags.NonPublic | BindingFlags.Static);\n"
+        "                ExtractTargetAddress = typeof(XrefScanner).GetMethod(\"ExtractTargetAddress\", BindingFlags.NonPublic | BindingFlags.Static);",
+        "#if !ANDROID\n"
+        "                DecoderForAddress = typeof(XrefScanner).GetMethod(\"DecoderForAddress\", BindingFlags.NonPublic | BindingFlags.Static);\n"
+        "                ExtractTargetAddress = typeof(XrefScanner).GetMethod(\"ExtractTargetAddress\", BindingFlags.NonPublic | BindingFlags.Static);\n"
+        "#endif",
+        "Il2CppInteropFixes.cs guard DecoderForAddress/ExtractTargetAddress on Android",
+    )
+    interop_fixes_text = replace_once(
+        interop_fixes_text,
+        "        public static int EstimateFunctionSize(IntPtr functionStart, int maxSize = 1000)",
+        "#if !ANDROID\n        public static int EstimateFunctionSize(IntPtr functionStart, int maxSize = 1000)",
+        "Il2CppInteropFixes.cs guard unused x86 Iced helpers start",
+    )
+    interop_fixes_text = replace_once(
+        interop_fixes_text,
+        "                        yield return currentFunctionStart;\n"
+        "                    }\n"
+        "                }\n"
+        "            }\n"
+        "        }\n"
+        "    }\n"
+        "}",
+        "                        yield return currentFunctionStart;\n"
+        "                    }\n"
+        "                }\n"
+        "            }\n"
+        "        }\n"
+        "#endif\n"
+        "    }\n"
+        "}",
+        "Il2CppInteropFixes.cs guard unused x86 Iced helpers end",
+    )
+    write_utf8(interop_fixes_path, interop_fixes_text)
 
-    # 11. Dependencies/SupportModules/Il2Cpp/Main.cs -> DllImportResolver for GameAssembly -> libil2cpp.so on Android
+    # 10b. MonoMod 25.1.2 compatibility in PatchShield, DetourContextDisposeFix, InstancePatchFix, and ForwardingAttributes
+    ps_path = ml / "Attributes/PatchShield.cs"
+    ps_text = ps_path.read_text(encoding="utf-8")
+    ps_text = replace_once(
+        ps_text,
+        "\t\t\tHook.OnDetour += (detour, originalMethod, patchMethod, delegateTarget) => MethodCheck(originalMethod);\n"
+        "\t\t\tILHook.OnDetour += (detour, originalMethod, ilmanipulator) => MethodCheck(originalMethod);\n"
+        "\t\t\tDetour.OnDetour += (detour, originalMethod, patchMethod) => MethodCheck(originalMethod);",
+        "#if ANDROID\n"
+        "\t\t\tDetourManager.DetourApplied += (info) => MethodCheck(info.Method.Method);\n"
+        "\t\t\tDetourManager.ILHookApplied += (info) => MethodCheck(info.Method.Method);\n"
+        "#else\n"
+        "\t\t\tHook.OnDetour += (detour, originalMethod, patchMethod, delegateTarget) => MethodCheck(originalMethod);\n"
+        "\t\t\tILHook.OnDetour += (detour, originalMethod, ilmanipulator) => MethodCheck(originalMethod);\n"
+        "\t\t\tDetour.OnDetour += (detour, originalMethod, patchMethod) => MethodCheck(originalMethod);\n"
+        "#endif",
+        "PatchShield.cs MonoMod 25.1.2 DetourManager events on Android",
+    )
+    write_utf8(ps_path, ps_text)
+
+    dc_path = ml / "Fixes/MonoMod/DetourContextDisposeFix.cs"
+    dc_text = dc_path.read_text(encoding="utf-8")
+    dc_text = replace_once(
+        dc_text,
+        "        internal static void Install()\n        {\n            try",
+        "        internal static void Install()\n        {\n#if ANDROID\n            return;\n#else\n            try",
+        "DetourContextDisposeFix.cs skip on Android start",
+    )
+    dc_text = replace_once(
+        dc_text,
+        "            catch (Exception e)\n            {\n                MelonLogger.Warning(e);\n            }\n        }",
+        "            catch (Exception e)\n            {\n                MelonLogger.Warning(e);\n            }\n#endif\n        }",
+        "DetourContextDisposeFix.cs skip on Android end",
+    )
+    write_utf8(dc_path, dc_text)
+
+    mm_ipf_path = ml / "Fixes/MonoMod/InstancePatchFix.cs"
+    mm_ipf_text = mm_ipf_path.read_text(encoding="utf-8")
+    mm_ipf_text = replace_once(
+        mm_ipf_text,
+        "            Hook.OnDetour += (detour, originalMethod, patchMethod, delegateTarget) => EnsureStatic(patchMethod);\n"
+        "            Detour.OnDetour += (detour, originalMethod, patchMethod) => EnsureStatic(patchMethod);",
+        "#if ANDROID\n"
+        "            DetourManager.DetourApplied += (info) => EnsureStatic(info.Entry);\n"
+        "#else\n"
+        "            Hook.OnDetour += (detour, originalMethod, patchMethod, delegateTarget) => EnsureStatic(patchMethod);\n"
+        "            Detour.OnDetour += (detour, originalMethod, patchMethod) => EnsureStatic(patchMethod);\n"
+        "#endif",
+        "Fixes/MonoMod/InstancePatchFix.cs DetourManager on Android",
+    )
+    write_utf8(mm_ipf_path, mm_ipf_text)
+
+    hm_ipf_path = ml / "Fixes/Harmony/InstancePatchFix.cs"
+    hm_ipf_text = hm_ipf_path.read_text(encoding="utf-8")
+    hm_ipf_text = replace_once(
+        hm_ipf_text,
+        "            Hook.OnDetour += (detour, originalMethod, patchMethod, delegateTarget) => PatchMethod(patchMethod);\n"
+        "            Detour.OnDetour += (detour, originalMethod, patchMethod) => PatchMethod(patchMethod);",
+        "#if ANDROID\n"
+        "            DetourManager.DetourApplied += (info) => PatchMethod(info.Entry);\n"
+        "#else\n"
+        "            Hook.OnDetour += (detour, originalMethod, patchMethod, delegateTarget) => PatchMethod(patchMethod);\n"
+        "            Detour.OnDetour += (detour, originalMethod, patchMethod) => PatchMethod(patchMethod);\n"
+        "#endif",
+        "Fixes/Harmony/InstancePatchFix.cs DetourManager on Android",
+    )
+    write_utf8(hm_ipf_path, hm_ipf_text)
+
+    fwd_rt_path = ml / "BackwardsCompatibility/ForwardingAttributes/MonoMod.RuntimeDetour.cs"
+    write_utf8(
+        fwd_rt_path,
+        "#if ANDROID\n"
+        "using System.Runtime.CompilerServices;\n\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.RuntimeDetour.DetourConfig))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.RuntimeDetour.DetourContext))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.RuntimeDetour.Hook))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.RuntimeDetour.ILHook))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.RuntimeDetour.HookGen.HookEndpointManager))]\n"
+        "#else\n" + fwd_rt_path.read_text(encoding="utf-8") + "\n#endif\n",
+    )
+
+    fwd_ut_path = ml / "BackwardsCompatibility/ForwardingAttributes/MonoMod.Utils.cs"
+    write_utf8(
+        fwd_ut_path,
+        "#if ANDROID\n"
+        "using System.Runtime.CompilerServices;\n\n"
+        "[assembly: TypeForwardedTo(typeof(IgnoresAccessChecksToAttribute))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.ModInterop.ModExportNameAttribute))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.ModInterop.ModImportNameAttribute))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.ModInterop.ModInteropManager))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.Utils.DynData<>))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.Utils.Extensions))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.Utils.FastReflectionHelper))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.Utils.GenericMethodInstantiationComparer))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.Utils.GenericTypeInstantiationComparer))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.Utils.LazyDisposable))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.Utils.LazyDisposable<>))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.Utils.DMDGenerator<>))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.Utils.DMDCecilGenerator))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.Utils.DMDEmitDynamicMethodGenerator))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.Utils.DynamicMethodDefinition))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.Utils.DynamicMethodReference))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.Utils.DynDll))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.Utils.Relinker))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.Utils.ICallSiteGenerator))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.Utils.MMReflectionImporter))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.Utils.ReflectionHelper))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.Utils.RelinkFailedException))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.Utils.RelinkTargetNotFoundException))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.Utils.WeakReferenceComparer))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.Utils.Cil.CecilILGenerator))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.Utils.Cil.ILGeneratorShim))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.Utils.Cil.ILGeneratorShimExt))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.Cil.ILContext))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.Cil.MoveType))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.Cil.SearchTarget))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.Cil.ILCursor))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.Cil.ILLabel))]\n"
+        "[assembly: TypeForwardedTo(typeof(MonoMod.Cil.ILPatternMatchingExt))]\n"
+        "#else\n" + fwd_ut_path.read_text(encoding="utf-8") + "\n#endif\n",
+    )
+
+    # 11. Dependencies/SupportModules/Il2Cpp/Il2Cpp.csproj + Main.cs
+    sm_csproj_path = root / "Dependencies/SupportModules/Il2Cpp/Il2Cpp.csproj"
+    sm_csproj_text = sm_csproj_path.read_text(encoding="utf-8")
+    sm_csproj_text = replace_once(
+        sm_csproj_text,
+        "        <PackageReference Include=\"HarmonyX\" Version=\"$(HarmonyXVersion)\" ExcludeAssets=\"Runtime\" />\n"
+        "        <PackageReference Include=\"Iced\" Version=\"$(IcedVersion)\" ExcludeAssets=\"Runtime\" />\n"
+        "        <PackageReference Include=\"Il2CppInterop.Common\" Version=\"$(Il2CppInteropVersion)\" ExcludeAssets=\"Runtime\" />\n"
+        "        <PackageReference Include=\"Il2CppInterop.Runtime\" Version=\"$(Il2CppInteropVersion)\" ExcludeAssets=\"Runtime\" />\n"
+        "        <PackageReference Include=\"Il2CppInterop.HarmonySupport\" Version=\"$(Il2CppInteropVersion)\" ExcludeAssets=\"Runtime\" />\n"
+        "        <PackageReference Include=\"Mono.Cecil\" Version=\"$(MonoCecilVersion)\" ExcludeAssets=\"Runtime\" />\n"
+        "        <PackageReference Include=\"MonoMod.RuntimeDetour\" Version=\"$(MonoModVersion)\" ExcludeAssets=\"Runtime\" />\n"
+        "        <PackageReference Include=\"MonoMod.Utils\" Version=\"$(MonoModVersion)\" ExcludeAssets=\"Runtime\" />",
+        "        <PackageReference Include=\"HarmonyX\" Version=\"$(HarmonyXVersion)\" ExcludeAssets=\"Runtime\" Condition=\"'$(AndroidBuild)' != 'true'\" />\n"
+        "        <PackageReference Include=\"Iced\" Version=\"$(IcedVersion)\" ExcludeAssets=\"Runtime\" Condition=\"'$(AndroidBuild)' != 'true'\" />\n"
+        "        <PackageReference Include=\"Il2CppInterop.Common\" Version=\"$(Il2CppInteropVersion)\" ExcludeAssets=\"Runtime\" Condition=\"'$(AndroidBuild)' != 'true'\" />\n"
+        "        <PackageReference Include=\"Il2CppInterop.Runtime\" Version=\"$(Il2CppInteropVersion)\" ExcludeAssets=\"Runtime\" Condition=\"'$(AndroidBuild)' != 'true'\" />\n"
+        "        <PackageReference Include=\"Il2CppInterop.HarmonySupport\" Version=\"$(Il2CppInteropVersion)\" ExcludeAssets=\"Runtime\" Condition=\"'$(AndroidBuild)' != 'true'\" />\n"
+        "        <PackageReference Include=\"Mono.Cecil\" Version=\"$(MonoCecilVersion)\" ExcludeAssets=\"Runtime\" />\n"
+        "        <PackageReference Include=\"MonoMod.RuntimeDetour\" Version=\"$(MonoModVersion)\" ExcludeAssets=\"Runtime\" Condition=\"'$(AndroidBuild)' != 'true'\" />\n"
+        "        <PackageReference Include=\"MonoMod.Utils\" Version=\"$(MonoModVersion)\" ExcludeAssets=\"Runtime\" Condition=\"'$(AndroidBuild)' != 'true'\" />\n"
+        "    </ItemGroup>\n"
+        "    <ItemGroup Condition=\"'$(AndroidBuild)' == 'true'\">\n"
+        "        <ProjectReference Include=\"$(SolutionDir)\\External\\HarmonyX\\Harmony\\Harmony.csproj\" Private=\"false\" />\n"
+        "        <ProjectReference Include=\"$(SolutionDir)\\External\\Il2CppInterop\\Il2CppInterop.Common\\Il2CppInterop.Common.csproj\" Private=\"false\" />\n"
+        "        <ProjectReference Include=\"$(SolutionDir)\\External\\Il2CppInterop\\Il2CppInterop.Runtime\\Il2CppInterop.Runtime.csproj\" Private=\"false\" />\n"
+        "        <ProjectReference Include=\"$(SolutionDir)\\External\\Il2CppInterop\\Il2CppInterop.HarmonySupport\\Il2CppInterop.HarmonySupport.csproj\" Private=\"false\" />\n"
+        "        <Reference Include=\"MonoMod.RuntimeDetour\">\n"
+        "            <HintPath>$(SolutionDir)\\External\\MonoMod\\artifacts\\bin\\MonoMod.RuntimeDetour\\$(Configuration.ToLower())_net8.0\\MonoMod.RuntimeDetour.dll</HintPath>\n"
+        "            <Private>false</Private>\n"
+        "        </Reference>\n"
+        "        <Reference Include=\"MonoMod.Utils\">\n"
+        "            <HintPath>$(SolutionDir)\\External\\MonoMod\\artifacts\\bin\\MonoMod.Utils\\$(Configuration.ToLower())_net8.0\\MonoMod.Utils.dll</HintPath>\n"
+        "            <Private>false</Private>\n"
+        "        </Reference>",
+        "SupportModules/Il2Cpp/Il2Cpp.csproj swap to LemonLoader forks on Android",
+    )
+    write_utf8(sm_csproj_path, sm_csproj_text)
+
+    # UnityUtilities -> swap Il2CppInterop.Runtime to External/Il2CppInterop on Android
+    for uu_rel in [
+        "UnityUtilities/UnityEngine.Il2CppAssetBundleManager/UnityEngine.Il2CppAssetBundleManager.csproj",
+        "UnityUtilities/UnityEngine.Il2CppImageConversionManager/UnityEngine.Il2CppImageConversionManager.csproj",
+    ]:
+        uu_path = root / uu_rel
+        uu_text = uu_path.read_text(encoding="utf-8")
+        uu_text = re.sub(
+            r'<PackageReference Include="Il2CppInterop\.Runtime" Version="\$\(Il2CppInteropVersion\)" Private="false"(\s*/>|>.*?</PackageReference>)',
+            lambda _m: (
+                '<PackageReference Include="Il2CppInterop.Runtime" Version="$(Il2CppInteropVersion)" Private="false" Condition="\'$(AndroidBuild)\' != \'true\'" />\n'
+                '        <ProjectReference Include="$(SolutionDir)\\External\\Il2CppInterop\\Il2CppInterop.Runtime\\Il2CppInterop.Runtime.csproj" Private="false" Condition="\'$(AndroidBuild)\' == \'true\'" />'
+            ),
+            uu_text,
+            flags=re.DOTALL,
+        )
+        write_utf8(uu_path, uu_text)
+
+    # 12. Dependencies/SupportModules/Il2Cpp/Main.cs -> DllImportResolver for GameAssembly -> libil2cpp.so on Android
     sm_main_path = root / "Dependencies/SupportModules/Il2Cpp/Main.cs"
     sm_main_text = sm_main_path.read_text(encoding="utf-8")
     sm_main_text = replace_once(
@@ -3570,13 +3861,26 @@ def patch_il2cpp_assembly_generator(root: Path) -> None:
     ag_csproj_text = ag_csproj.read_text(encoding="utf-8")
     ag_csproj_text = replace_once(
         ag_csproj_text,
-        "        <PackageReference Include=\"Mono.Cecil\" Version=\"$(MonoCecilVersion)\" ExcludeAssets=\"Runtime\" />\n    </ItemGroup>",
-        "        <PackageReference Include=\"Mono.Cecil\" Version=\"$(MonoCecilVersion)\" ExcludeAssets=\"Runtime\" />\n    </ItemGroup>\n\n"
+        "        <PackageReference Include=\"Iced\" Version=\"$(IcedVersion)\" ExcludeAssets=\"Runtime\" />\n"
+        "        <PackageReference Include=\"Il2CppInterop.Generator\" Version=\"$(Il2CppInteropVersion)\" ExcludeAssets=\"Runtime\" />\n"
+        "        <PackageReference Include=\"Il2CppInterop.Common\" Version=\"$(Il2CppInteropVersion)\" ExcludeAssets=\"Runtime\" />\n"
+        "        <PackageReference Include=\"Il2CppInterop.Runtime\" Version=\"$(Il2CppInteropVersion)\" ExcludeAssets=\"Runtime\" />\n"
+        "        <PackageReference Include=\"Mono.Cecil\" Version=\"$(MonoCecilVersion)\" ExcludeAssets=\"Runtime\" />\n"
+        "    </ItemGroup>",
+        "        <PackageReference Include=\"Iced\" Version=\"$(IcedVersion)\" ExcludeAssets=\"Runtime\" Condition=\"'$(AndroidBuild)' != 'true'\" />\n"
+        "        <PackageReference Include=\"Il2CppInterop.Generator\" Version=\"$(Il2CppInteropVersion)\" ExcludeAssets=\"Runtime\" Condition=\"'$(AndroidBuild)' != 'true'\" />\n"
+        "        <PackageReference Include=\"Il2CppInterop.Common\" Version=\"$(Il2CppInteropVersion)\" ExcludeAssets=\"Runtime\" Condition=\"'$(AndroidBuild)' != 'true'\" />\n"
+        "        <PackageReference Include=\"Il2CppInterop.Runtime\" Version=\"$(Il2CppInteropVersion)\" ExcludeAssets=\"Runtime\" Condition=\"'$(AndroidBuild)' != 'true'\" />\n"
+        "        <PackageReference Include=\"Mono.Cecil\" Version=\"$(MonoCecilVersion)\" ExcludeAssets=\"Runtime\" />\n"
+        "    </ItemGroup>\n\n"
         "    <ItemGroup Condition=\"'$(AndroidBuild)' == 'true'\">\n"
         "        <ProjectReference Include=\"$(SolutionDir)\\External\\Cpp2IL\\Cpp2IL.Core\\Cpp2IL.Core.csproj\" />\n"
         "        <ProjectReference Include=\"$(SolutionDir)\\External\\Cpp2IL\\LibCpp2IL\\LibCpp2IL.csproj\" />\n"
+        "        <ProjectReference Include=\"$(SolutionDir)\\External\\Il2CppInterop\\Il2CppInterop.Generator\\Il2CppInterop.Generator.csproj\" Private=\"false\" />\n"
+        "        <ProjectReference Include=\"$(SolutionDir)\\External\\Il2CppInterop\\Il2CppInterop.Common\\Il2CppInterop.Common.csproj\" Private=\"false\" />\n"
+        "        <ProjectReference Include=\"$(SolutionDir)\\External\\Il2CppInterop\\Il2CppInterop.Runtime\\Il2CppInterop.Runtime.csproj\" Private=\"false\" />\n"
         "    </ItemGroup>",
-        "Il2CppAssemblyGenerator.csproj Android Cpp2IL ProjectReferences",
+        "Il2CppAssemblyGenerator.csproj Android Cpp2IL + Il2CppInterop ProjectReferences",
     )
     write_utf8(ag_csproj, ag_csproj_text)
 
@@ -3927,6 +4231,97 @@ namespace MelonLoader.Il2CppAssemblyGenerator.Packages
     print("[patched] Il2CppAssemblyGenerator (Android in-process Cpp2IL + JNI libil2cpp.so lookup)")
 
 
+def patch_external_android_deps(root: Path) -> None:
+    ext = root / "External"
+
+    # 1. External/MonoMod: relax global.json rollForward + add mprotect/icache flush to AndroidSystem.PatchData
+    mm_dir = ext / "MonoMod"
+    if mm_dir.exists():
+        mm_gj = mm_dir / "global.json"
+        if mm_gj.exists():
+            gj_text = mm_gj.read_text(encoding="utf-8")
+            gj_text = gj_text.replace('"rollForward": "latestPatch"', '"rollForward": "latestFeature"')
+            gj_text = gj_text.replace('"version": "8.0.301"', '"version": "8.0.0"')
+            write_utf8(mm_gj, gj_text)
+
+        android_sys_path = mm_dir / "src/MonoMod.Core/Platforms/Systems/AndroidSystem.cs"
+        if android_sys_path.exists():
+            as_text = android_sys_path.read_text(encoding="utf-8")
+            if "lemon_clear_icache" not in as_text:
+                as_text = replace_once(
+                    as_text,
+                    "        public unsafe void PatchData(PatchTargetKind patchKind, IntPtr patchTarget, ReadOnlySpan<byte> data, Span<byte> backup)\n"
+                    "        {\n"
+                    "            // TODO: should this be thread-safe? It definitely is not right now.\n"
+                    "\n"
+                    "            // no memory protection cause it seems to not work, idk, i have no idea how this works\n"
+                    "\n"
+                    "            var target = new Span<byte>((void*)patchTarget, data.Length);\n"
+                    "            // now we copy target to backup, then data to target, then flush the instruction cache\n"
+                    "            _ = target.TryCopyTo(backup);\n"
+                    "            data.CopyTo(target);\n"
+                    "        }",
+                    "#if NET6_0_OR_GREATER\n"
+                    "        private static readonly unsafe delegate* unmanaged[Cdecl]<IntPtr, IntPtr, void> s_clearIcache = ResolveClearIcache();\n"
+                    "\n"
+                    "        private static unsafe delegate* unmanaged[Cdecl]<IntPtr, IntPtr, void> ResolveClearIcache()\n"
+                    "        {\n"
+                    "            if (System.Runtime.InteropServices.NativeLibrary.TryLoad(\"libmain.so\", out var handle) &&\n"
+                    "                System.Runtime.InteropServices.NativeLibrary.TryGetExport(handle, \"lemon_clear_icache\", out var fn))\n"
+                    "            {\n"
+                    "                return (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, void>)fn;\n"
+                    "            }\n"
+                    "            return null;\n"
+                    "        }\n"
+                    "#endif\n\n"
+                    "        public unsafe void PatchData(PatchTargetKind patchKind, IntPtr patchTarget, ReadOnlySpan<byte> data, Span<byte> backup)\n"
+                    "        {\n"
+                    "            var prot = patchKind == PatchTargetKind.Executable\n"
+                    "                ? Unix.Protection.Read | Unix.Protection.Write | Unix.Protection.Execute\n"
+                    "                : Unix.Protection.Read | Unix.Protection.Write;\n"
+                    "            nint addr = patchTarget;\n"
+                    "            nint size = data.Length;\n"
+                    "            RoundToPageBoundary(ref addr, ref size);\n"
+                    "            _ = Unix.Mprotect(addr, (nuint)size, prot);\n"
+                    "\n"
+                    "            var target = new Span<byte>((void*)patchTarget, data.Length);\n"
+                    "            _ = target.TryCopyTo(backup);\n"
+                    "            data.CopyTo(target);\n\n"
+                    "#if NET6_0_OR_GREATER\n"
+                    "            if (patchKind == PatchTargetKind.Executable && s_clearIcache != null)\n"
+                    "            {\n"
+                    "                s_clearIcache(patchTarget, patchTarget + data.Length);\n"
+                    "            }\n"
+                    "#endif\n"
+                    "        }",
+                    "AndroidSystem.cs Mprotect + lemon_clear_icache",
+                )
+                write_utf8(android_sys_path, as_text)
+
+    # 2. External/HarmonyX: build netstandard2.0 cleanly on Linux without net35/net452 pack
+    hx_csproj = ext / "HarmonyX/Harmony/Harmony.csproj"
+    if hx_csproj.exists():
+        hx_text = hx_csproj.read_text(encoding="utf-8")
+        hx_text = replace_once(
+            hx_text,
+            "        <TargetFrameworks>net35;net452;netstandard2.0</TargetFrameworks>\n"
+            "        <GeneratePackageOnBuild>true</GeneratePackageOnBuild>",
+            "        <TargetFrameworks>netstandard2.0</TargetFrameworks>\n"
+            "        <GeneratePackageOnBuild>false</GeneratePackageOnBuild>",
+            "Harmony.csproj netstandard2.0 on Linux/Android",
+        )
+        write_utf8(hx_csproj, hx_text)
+
+    # 3. External/Il2CppInterop: disable GeneratePackageOnBuild for faster project build
+    il2_props = ext / "Il2CppInterop/Directory.Build.props"
+    if il2_props.exists():
+        il2_text = il2_props.read_text(encoding="utf-8")
+        il2_text = il2_text.replace("<GeneratePackageOnBuild>true</GeneratePackageOnBuild>", "<GeneratePackageOnBuild>false</GeneratePackageOnBuild>")
+        write_utf8(il2_props, il2_text)
+
+    print("[patched] External/{MonoMod,HarmonyX,Il2CppInterop} Android build & mprotect/icache")
+
+
 def main() -> int:
     if len(sys.argv) != 3:
         print(
@@ -3951,6 +4346,7 @@ def main() -> int:
     patch_bootstrap_targets_and_csproj(root)
     write_android_proxy_and_early_log(root)
     patch_bootstrap_runtime_files(root)
+    patch_external_android_deps(root)
     patch_managed_melonloader(root)
     patch_il2cpp_assembly_generator(root)
     print("[success] LavaGang/MelonLoader v0.7.3 Open-Beta Android ARM64 port applied cleanly.")

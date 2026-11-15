@@ -443,14 +443,17 @@ public sealed class InstallerTests : IDisposable
     [Fact]
     public void Diagnostics_PassesNativeAot073Layout_AndRemovesStale06XLibsOnPatch()
     {
-        byte[] runtimeInitBytes = CompileCSharpAssembly("Il2CppInterop.Runtime", """
+        byte[] runtime073Bytes = CompileCSharpAssembly("Il2CppInterop.Runtime", """
             namespace Il2CppInterop.Runtime.Injection {
                 public class RegisterTypeOptions {
                     public bool LogSuccess { get; init; } = true;
                 }
+                public static class AndroidMarker {
+                    public const string Lib = "libil2cpp.so";
+                }
             }
             """);
-        byte[] il2cppMatchingBytes = CompileCSharpAssembly("Il2Cpp", """
+        byte[] il2cppMatching073Bytes = CompileCSharpAssembly("Il2Cpp", """
             namespace MelonLoader.Support {
                 public class Main {
                     public static void Test() {
@@ -459,7 +462,7 @@ public sealed class InstallerTests : IDisposable
                 }
             }
             """,
-            MetadataReference.CreateFromImage(runtimeInitBytes));
+            MetadataReference.CreateFromImage(runtime073Bytes));
         byte[] ml073Bytes = CompileCSharpAssembly("MelonLoader", """
             namespace MelonLoader.Fixes.Il2CppInterop {
                 public static class Il2CppICallInjector { }
@@ -476,6 +479,15 @@ public sealed class InstallerTests : IDisposable
         Encoding.ASCII.GetBytes("SSL_CERT_DIR").CopyTo(libMainElf, libMainElf.Length - 128);
         Encoding.ASCII.GetBytes("lemon_early_crash.log").CopyTo(libMainElf, libMainElf.Length - 64);
 
+        byte[] monoModCore073Bytes = CompileCSharpAssembly("MonoMod.Core", """
+            namespace MonoMod.Core.Platforms.Systems {
+                public sealed class AndroidSystem { }
+            }
+            namespace MonoMod.Core.Platforms.Architectures {
+                public sealed class Arm64Arch { }
+            }
+            """);
+
         string bundle073 = Path.Combine(_workDir, "melon_073_nativeaot.zip");
         using (var fs = File.Create(bundle073))
         using (var zip = new ZipArchive(fs, ZipArchiveMode.Create))
@@ -488,15 +500,17 @@ public sealed class InstallerTests : IDisposable
             }
 
             WriteBytes("MelonLoader/net6/MelonLoader.dll", ml073Bytes);
-            WriteBytes("MelonLoader/net6/Il2CppInterop.Runtime.dll", runtimeInitBytes);
+            WriteBytes("MelonLoader/net6/Il2CppInterop.Runtime.dll", runtime073Bytes);
             WriteBytes("MelonLoader/net6/0Harmony.dll", harmonyBytes);
             WriteBytes("MelonLoader/net6/Il2CppInterop.HarmonySupport.dll", genericValidPe);
             WriteBytes("MelonLoader/net6/Il2CppInterop.Common.dll", genericValidPe);
             WriteBytes("MelonLoader/net6/Il2CppInterop.Generator.dll", genericValidPe);
+            WriteBytes("MelonLoader/net6/Disarm.dll", genericValidPe);
+            WriteBytes("MelonLoader/net6/MonoMod.Core.dll", monoModCore073Bytes);
             WriteBytes("MelonLoader/net6/MonoMod.RuntimeDetour.dll", genericValidPe);
             WriteBytes("MelonLoader/net6/MelonLoader.NativeHost.dll", genericValidPe);
             WriteBytes("MelonLoader/net6/MelonLoader.runtimeconfig.json", Encoding.UTF8.GetBytes("{}"));
-            WriteBytes("MelonLoader/Dependencies/SupportModules/Il2Cpp.dll", il2cppMatchingBytes);
+            WriteBytes("MelonLoader/Dependencies/SupportModules/Il2Cpp.dll", il2cppMatching073Bytes);
             WriteBytes("MelonLoader/Dependencies/Il2CppAssemblyGenerator/Il2CppAssemblyGenerator.dll", genericValidPe);
             WriteBytes("MelonLoader/Dependencies/Il2CppAssemblyGenerator/Cpp2IL.Core.dll", genericValidPe);
             WriteBytes("dotnet/host/fxr/8.0.6/libhostfxr.so", CreateFakeArm64Elf());

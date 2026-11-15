@@ -390,6 +390,33 @@ public static class LemonDataDiagnostics
         {
             CheckManagedAssembly(report, readBytes, mlPrefix + "Dependencies/Il2CppAssemblyGenerator/Cpp2IL.Core.dll", "Cpp2IL.Core.dll",
                 info => (DiagnosticSeverity.Pass, $"In-process Cpp2IL.Core.dll v{info.AssemblyVersion} OK."));
+
+            CheckManagedAssembly(report, readBytes, $"{mlPrefix}{runtimeSubdir}/MonoMod.Core.dll", "MonoMod.Core.dll",
+                info =>
+                {
+                    bool hasAndroidSystem = info.TypeNames.Contains("MonoMod.Core.Platforms.Systems.AndroidSystem");
+                    bool hasArm64Arch = info.TypeNames.Contains("MonoMod.Core.Platforms.Architectures.Arm64Arch");
+                    if (!hasAndroidSystem || !hasArm64Arch)
+                        return (DiagnosticSeverity.Critical, "MonoMod.Core.dll lacks AndroidSystem / Arm64Arch (.NET 8 FixupPrecode support).");
+                    return (DiagnosticSeverity.Pass, $"MonoMod.Core.dll v{info.AssemblyVersion} (AndroidSystem + Arm64Arch) OK.");
+                });
+
+            CheckManagedAssembly(report, readBytes, $"{mlPrefix}{runtimeSubdir}/Disarm.dll", "Disarm.dll",
+                info => (DiagnosticSeverity.Pass, $"Disarm.dll (ARM64 disassembler) v{info.AssemblyVersion} OK."));
+
+            if (interopRuntime != null)
+            {
+                bool hasAndroidIl2Cpp =
+                    ElfHeaderInspector.ContainsAscii(interopRuntime, "libil2cpp.so") ||
+                    ElfHeaderInspector.ContainsUtf16(interopRuntime, "libil2cpp.so");
+                report.Checks.Add(new DiagnosticCheck(
+                    "IL2CPP_INTEROP_ANDROID_ARM64",
+                    "Il2CppInterop.Runtime.dll",
+                    hasAndroidIl2Cpp ? DiagnosticSeverity.Pass : DiagnosticSeverity.Critical,
+                    hasAndroidIl2Cpp
+                        ? "Il2CppInterop.Runtime.dll targets Android libil2cpp.so (ARM64 Disarm)."
+                        : "Il2CppInterop.Runtime.dll lacks libil2cpp.so support (upstream x86/desktop build will fail on Android!)."));
+            }
         }
 
         CheckManagedAssembly(report, readBytes, $"{mlPrefix}{runtimeSubdir}/MonoMod.RuntimeDetour.dll", "MonoMod.RuntimeDetour.dll",
