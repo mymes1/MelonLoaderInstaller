@@ -81,7 +81,7 @@ public sealed class ApkAnalysisReport
             sb.AppendLine($"libil2cpp.so ELF:   {LibIl2CppElf.ArchitectureName}, max PT_LOAD align={LibIl2CppElf.MaxLoadSegmentAlignment}");
         sb.AppendLine($"Manifest Flags:     debuggable={Debuggable?.ToString() ?? "unset"}, requestLegacyExternalStorage={RequestLegacyExternalStorage?.ToString() ?? "unset"}, extractNativeLibs={ExtractNativeLibs?.ToString() ?? "unset"}");
         sb.AppendLine($"APK Signatures:     V2={(HasV2SignatureBlock ? "Present" : "Absent")}, V1={(HasV1Signature ? "Present" : "Absent")}");
-        sb.AppendLine($"LemonLoader State:  {(IsLemonPatched ? "Patched" : "Unpatched")} (assets/MelonLoader={HasMelonLoaderAssets}, assets/dotnet={HasDotnetAssets}, libBootstrap.so={HasLibBootstrap})");
+        sb.AppendLine($"LemonLoader State:  {(IsLemonPatched ? "Patched" : "Unpatched")} (assets/MelonLoader={HasMelonLoaderAssets}, assets/dotnet={HasDotnetAssets}, libmain.so={HasLibMain}, libBootstrap.so={HasLibBootstrap})");
         if (!string.IsNullOrWhiteSpace(LemonStage))
             sb.AppendLine($"Lemon Stage Mode:   {LemonStage.Trim()}");
         if (!string.IsNullOrWhiteSpace(LemonPatchDate))
@@ -118,6 +118,10 @@ public sealed class ApkAnalysisReport
         string[] keyExports =
         [
             "JNI_OnLoad",
+            "GetJavaVM",
+            "GetLoaderConfig",
+            "NativeHookAttach",
+            "LogMsg",
             "startup",
             "load",
             "unload",
@@ -155,12 +159,24 @@ public sealed class ApkAnalysisReport
 
         sb.AppendLine();
         sb.AppendLine("Runtime Load Order:");
-        sb.AppendLine("  1. UnityPlayer Java -> System.loadLibrary(\"main\") -> libmain.so::JNI_OnLoad");
-        sb.AppendLine("  2. NativeLoader.load(libDir) -> reads lemon_stage.txt:");
-        sb.AppendLine("     - no_hooks:           dlopen(libunity.so) -> libunity.so::JNI_OnLoad (skips libBootstrap.so)");
-        sb.AppendLine("     - minimal_bootstrap:  dlopen(libBootstrap.so) -> JNI_OnLoad -> dlopen(libunity.so) -> JNI_OnLoad (skips startup/hooks)");
-        sb.AppendLine("     - il2cpp_init_only:   + libBootstrap.so::startup() -> dlopen(libil2cpp.so) -> DobbyHook(il2cpp_init) (skips CoreCLR)");
-        sb.AppendLine("     - full:               + base_assembly::init (libhostfxr.so / libcoreclr.so) -> DobbyHook(il2cpp_runtime_invoke)");
+        if (!HasLibBootstrap && HasLibMain && HasMelonLoaderAssets)
+        {
+            sb.AppendLine("  1. UnityPlayer Java -> System.loadLibrary(\"main\") -> NativeAOT libmain.so::JNI_OnLoad");
+            sb.AppendLine("  2. NativeLoader.load(libDir) -> dlopen(libDir/libunity.so) + libunity.so::JNI_OnLoad");
+            sb.AppendLine("  3. AndroidBootstrap.LoadBootstrap() -> reads assets/lemon_stage.txt:");
+            sb.AppendLine("     - no_hooks / minimal_bootstrap: stops before Core.Init / Dobby hooks");
+            sb.AppendLine("     - il2cpp_init_only:             + Core.Init() + libil2cpp.so hook (skips CoreCLR)");
+            sb.AppendLine("     - full:                         + DotnetHandler (libhostfxr.so / libcoreclr.so) + MelonLoader.dll + Cpp2IL");
+        }
+        else
+        {
+            sb.AppendLine("  1. UnityPlayer Java -> System.loadLibrary(\"main\") -> libmain.so::JNI_OnLoad");
+            sb.AppendLine("  2. NativeLoader.load(libDir) -> reads lemon_stage.txt:");
+            sb.AppendLine("     - no_hooks:           dlopen(libunity.so) -> libunity.so::JNI_OnLoad (skips libBootstrap.so)");
+            sb.AppendLine("     - minimal_bootstrap:  dlopen(libBootstrap.so) -> JNI_OnLoad -> dlopen(libunity.so) -> JNI_OnLoad (skips startup/hooks)");
+            sb.AppendLine("     - il2cpp_init_only:   + libBootstrap.so::startup() -> dlopen(libil2cpp.so) -> DobbyHook(il2cpp_init) (skips CoreCLR)");
+            sb.AppendLine("     - full:               + base_assembly::init (libhostfxr.so / libcoreclr.so) -> DobbyHook(il2cpp_runtime_invoke)");
+        }
         return sb.ToString();
     }
 }
