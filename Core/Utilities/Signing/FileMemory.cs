@@ -1,7 +1,5 @@
-﻿using System;
-using System.Collections.Generic;
+using System;
 using System.IO;
-using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -44,7 +42,10 @@ namespace MelonLoader.Installer.Core.Utilities.Signing
 
         public byte ReadBytes()
         {
-            return (byte) Stream.ReadByte();
+            int b = Stream.ReadByte();
+            if (b < 0)
+                throw new EndOfStreamException("Unexpected end of stream while reading byte.");
+            return (byte)b;
         }
 
         public void WriteBytes(byte[] bytes)
@@ -54,8 +55,12 @@ namespace MelonLoader.Installer.Core.Utilities.Signing
 
         public byte[] ReadBytes(int count)
         {
+            if (count < 0)
+                throw new ArgumentOutOfRangeException(nameof(count), $"Cannot read negative byte count: {count}");
+            if (count == 0)
+                return [];
             byte[] bytes = new byte[count];
-            Stream.Read(bytes, 0, count);
+            Stream.ReadExactly(bytes, 0, count);
             return bytes;
         }
 
@@ -64,7 +69,17 @@ namespace MelonLoader.Installer.Core.Utilities.Signing
             return BitConverter.ToInt16(ReadBytes(2), 0);
         }
 
+        public ushort ReadUShort()
+        {
+            return BitConverter.ToUInt16(ReadBytes(2), 0);
+        }
+
         public void WriteShort(short value)
+        {
+            WriteBytes(BitConverter.GetBytes(value));
+        }
+
+        public void WriteUShort(ushort value)
         {
             WriteBytes(BitConverter.GetBytes(value));
         }
@@ -74,14 +89,14 @@ namespace MelonLoader.Installer.Core.Utilities.Signing
             return BitConverter.ToInt32(ReadBytes(4), 0);
         }
 
-        public void WriteInt(int value)
-        {
-            WriteBytes(BitConverter.GetBytes(value));
-        }
-
         public uint ReadUInt()
         {
             return BitConverter.ToUInt32(ReadBytes(4), 0);
+        }
+
+        public void WriteInt(int value)
+        {
+            WriteBytes(BitConverter.GetBytes(value));
         }
 
         public void WriteUInt(uint value)
@@ -121,7 +136,19 @@ namespace MelonLoader.Installer.Core.Utilities.Signing
 
         public static int StringLength(string value)
         {
-            return Encoding.UTF8.GetBytes(value).Length;
+            return Encoding.UTF8.GetByteCount(value);
+        }
+
+        public static void CopyExact(Stream source, Stream destination, long byteCount, byte[] buffer)
+        {
+            long remaining = byteCount;
+            while (remaining > 0)
+            {
+                int toRead = (int)Math.Min(remaining, buffer.Length);
+                source.ReadExactly(buffer, 0, toRead);
+                destination.Write(buffer, 0, toRead);
+                remaining -= toRead;
+            }
         }
     }
 }

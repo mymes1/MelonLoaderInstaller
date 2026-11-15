@@ -92,6 +92,35 @@ jobs:
           fi
           cat "$RUNNER_TEMP/test.log"
 
+      - name: Verify APK alignment and V2/V3 signature with Android SDK apksigner & zipalign
+        run: |
+          python3 - <<'PY' "$RUNNER_TEMP/raw_test.apk"
+          import sys, zipfile
+          with zipfile.ZipFile(sys.argv[1], 'w') as zf:
+              zf.writestr('AndroidManifest.xml', b'manifest-placeholder', compress_type=zipfile.ZIP_DEFLATED)
+              zf.writestr('META-INF/MANIFEST.MF', b'Manifest-Version: 1.0\r\n', compress_type=zipfile.ZIP_DEFLATED)
+              zf.writestr('META-INF/CERT.SF', b'Signature-Version: 1.0\r\n', compress_type=zipfile.ZIP_DEFLATED)
+              zf.writestr('META-INF/CERT.RSA', b'\x00' * 64, compress_type=zipfile.ZIP_DEFLATED)
+              zf.writestr('lib/arm64-v8a/libunity.so', b'\x7fELF' + b'\x00' * 1024, compress_type=zipfile.ZIP_STORED)
+              zf.writestr('lib/arm64-v8a/libmain.so', b'\x7fELF' + b'\x00' * 2048, compress_type=zipfile.ZIP_STORED)
+          PY
+
+          dotnet run --project Cli/MelonLoader.Installer.Cli.csproj -c Release --no-build -- sign "$RUNNER_TEMP/raw_test.apk" --out "$RUNNER_TEMP/signed_test.apk"
+
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          BT_DIR="$(ls -d "$SDK_ROOT"/build-tools/* 2>/dev/null | sort -V | tail -n 1)"
+          if [ -z "$BT_DIR" ]; then
+            echo "::error::Android SDK build-tools not found under $SDK_ROOT"
+            exit 1
+          fi
+          echo "Using build-tools: $BT_DIR"
+          "$BT_DIR/apksigner" verify --verbose --print-certs "$RUNNER_TEMP/signed_test.apk"
+          if "$BT_DIR/zipalign" --help 2>&1 | grep -q -- "-P "; then
+            "$BT_DIR/zipalign" -c -v -P 16 4 "$RUNNER_TEMP/signed_test.apk"
+          else
+            "$BT_DIR/zipalign" -c -v 4 "$RUNNER_TEMP/signed_test.apk"
+          fi
+
   build-and-test-windows:
     runs-on: windows-latest
     needs: [ build-repaired-lemonloader ]

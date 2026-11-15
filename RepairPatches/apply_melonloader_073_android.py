@@ -40,6 +40,8 @@ def copy_lemon070_android_files(root: Path, lemon_070: Path) -> None:
         root / "MelonLoader/Utils/APKAssetManager.cs",
     )
 
+    patch_lemon070_jni_and_asset_manager(root)
+
     # 2. Native static deps for linux-bionic-arm64 (libdobby.a, libplthook.a)
     deps_src = lemon_070 / "MelonLoader.Bootstrap/Deps/linux-bionic-arm64"
     deps_dst = root / "MelonLoader.Bootstrap/Deps/linux-bionic-arm64"
@@ -54,6 +56,248 @@ def copy_lemon070_android_files(root: Path, lemon_070: Path) -> None:
     )
 
     print("[copied] LemonLoader 0.7.0 JNI, APKAssetManager, linux-bionic-arm64 deps, and ClrMonoLib")
+
+
+def patch_lemon070_jni_and_asset_manager(root: Path) -> None:
+    # Fix 1: JObject.cs must NEVER call DeleteLocalRef from the GC Finalizer thread (!disposing),
+    # because ART JNI aborts if another thread deletes a thread-local reference.
+    jobj_path = root / "MelonLoader/JNI/JObject.cs"
+    jobj_text = jobj_path.read_text(encoding="utf-8")
+    jobj_text = replace_once(
+        jobj_text,
+        "            case JNI.ReferenceType.Local:\n"
+        "                JNI.DeleteLocalRef(this);\n"
+        "                break;",
+        "            case JNI.ReferenceType.Local:\n"
+        "                if (disposing)\n"
+        "                    JNI.DeleteLocalRef(this);\n"
+        "                break;",
+        "JObject.cs guard DeleteLocalRef to disposing thread",
+    )
+    write_utf8(jobj_path, jobj_text)
+
+    # Fix 2: JNI.FindClass must lock ClassCache, never cache failed lookups (IntPtr.Zero),
+    # and return a fresh LocalRef instead of the cached GlobalRef so `using JClass` never
+    # deletes the cached GlobalRef out from under ClassCache!
+    jni_path = root / "MelonLoader/JNI/JNI.cs"
+    jni_text = jni_path.read_text(encoding="utf-8")
+    jni_text = replace_once(
+        jni_text,
+        "    public static JClass FindClass(string name)\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            if (ClassCache.TryGetValue(name, out JClass? found))\n"
+        "            {\n"
+        "                return found;\n"
+        "            }\n"
+        "            else\n"
+        "            {\n"
+        "                IntPtr nameAnsi = Marshal.StringToHGlobalAnsi(name);\n"
+        "                IntPtr res = Env->Functions->FindClass(Env, nameAnsi);\n\n"
+        "                Marshal.FreeHGlobal(nameAnsi);\n\n"
+        "                using JClass local = new() { Handle = res, ReferenceType = JNI.ReferenceType.Local };\n"
+        "                JClass global = NewGlobalRef<JClass>(local);\n"
+        "                ClassCache.Add(name, global);\n"
+        "                return global;\n"
+        "            }\n"
+        "        }\n"
+        "    }",
+        "    public static JClass FindClass(string name)\n"
+        "    {\n"
+        "        unsafe\n"
+        "        {\n"
+        "            lock (ClassCache)\n"
+        "            {\n"
+        "                if (ClassCache.TryGetValue(name, out JClass? found) && found != null && found.Valid())\n"
+        "                    return NewLocalRef<JClass>(found);\n\n"
+        "                IntPtr nameAnsi = Marshal.StringToHGlobalAnsi(name);\n"
+        "                IntPtr res = Env->Functions->FindClass(Env, nameAnsi);\n"
+        "                Marshal.FreeHGlobal(nameAnsi);\n\n"
+        "                if (res == IntPtr.Zero)\n"
+        "                    return new JClass { Handle = IntPtr.Zero, ReferenceType = JNI.ReferenceType.Local };\n\n"
+        "                using JClass local = new() { Handle = res, ReferenceType = JNI.ReferenceType.Local };\n"
+        "                JClass global = NewGlobalRef<JClass>(local);\n"
+        "                ClassCache[name] = global;\n"
+        "                return NewLocalRef<JClass>(global);\n"
+        "            }\n"
+        "        }\n"
+        "    }",
+        "JNI.cs FindClass thread-safe + return LocalRef",
+    )
+    write_utf8(jni_path, jni_text)
+
+    # Fix 3: APKAssetManager.cs
+    # - Fix DoesAssetExist when path has no '/' (e.g. "lemon_stage.txt", "lemon_patch_date.txt")
+    # - Clear pending JNI exception BEFORE returning null in GetAssetStream / GetAssetBytes
+    # - Null-check assets array in GetDirectoryContents / DoesAssetExist
+    # - Safely obtain Context via UnityPlayer.currentActivity OR ActivityThread.currentApplication()
+    #   (critical for Unity 2023/Unity 6 GameActivity apps such as Sonic Dream Team!)
+    aam_path = root / "MelonLoader/Utils/APKAssetManager.cs"
+    aam_text = aam_path.read_text(encoding="utf-8")
+    aam_text = replace_once(
+        aam_text,
+        "        using JObject asset = JNI.CallObjectMethod<JObject>(assetManager, JNI.GetMethodID(assetManagerClass, \"open\", \"(Ljava/lang/String;)Ljava/io/InputStream;\"), new JValue(pathString));\n"
+        "        if (asset == null || !asset.Valid())\n"
+        "            return [];",
+        "        using JObject asset = JNI.CallObjectMethod<JObject>(assetManager, JNI.GetMethodID(assetManagerClass, \"open\", \"(Ljava/lang/String;)Ljava/io/InputStream;\"), new JValue(pathString));\n"
+        "        HandleException();\n"
+        "        if (asset == null || !asset.Valid())\n"
+        "            return [];",
+        "APKAssetManager.cs GetAssetBytes HandleException before return",
+    )
+    aam_text = replace_once(
+        aam_text,
+        "        JObject asset = JNI.CallObjectMethod<JObject>(assetManager, JNI.GetMethodID(assetManagerClass, \"open\", \"(Ljava/lang/String;)Ljava/io/InputStream;\"), new JValue(pathString));\n"
+        "        if (asset == null || !asset.Valid())\n"
+        "            return null;\n\n"
+        "        HandleException();",
+        "        JObject asset = JNI.CallObjectMethod<JObject>(assetManager, JNI.GetMethodID(assetManagerClass, \"open\", \"(Ljava/lang/String;)Ljava/io/InputStream;\"), new JValue(pathString));\n"
+        "        HandleException();\n"
+        "        if (asset == null || !asset.Valid())\n"
+        "            return null;",
+        "APKAssetManager.cs GetAssetStream HandleException before return",
+    )
+    aam_text = replace_once(
+        aam_text,
+        "    public static string[] GetDirectoryContents(string directory)\n"
+        "    {\n"
+        "        using JString pathString = JNI.NewString(directory);\n"
+        "        using JClass assetManagerClass = JNI.GetObjectClass(assetManager);\n"
+        "        using JObjectArray<JString> assets = JNI.CallObjectMethod<JObjectArray<JString>>(assetManager, JNI.GetMethodID(assetManagerClass, \"list\", \"(Ljava/lang/String;)[Ljava/lang/String;\"), new JValue(pathString));\n\n"
+        "        string[] cleanAssets = [.. assets.Select(a => a.GetString())];\n"
+        "        HandleException();\n\n"
+        "        return cleanAssets;\n"
+        "    }\n\n"
+        "    public static bool DoesAssetExist(string path)\n"
+        "    {\n"
+        "        // using `list` isn't as fast as just calling open, but this allows the function to not crash on debuggable builds of apps\n"
+        "        string containingDir = path[..path.LastIndexOf('/')];\n"
+        "        using JString pathString = JNI.NewString(containingDir);\n"
+        "        using JClass assetManagerClass = JNI.GetObjectClass(assetManager);\n"
+        "        using JObjectArray<JString> assets = JNI.CallObjectMethod<JObjectArray<JString>>(assetManager, JNI.GetMethodID(assetManagerClass, \"list\", \"(Ljava/lang/String;)[Ljava/lang/String;\"), new JValue(pathString));\n\n"
+        "        bool exists = assets.Any(js =>\n"
+        "        {\n"
+        "            string asset = JNI.GetJStringString(js);\n"
+        "            return path.EndsWith(asset);\n"
+        "        });\n\n"
+        "        HandleException();\n\n"
+        "        return exists;\n"
+        "    }",
+        "    public static string[] GetDirectoryContents(string directory)\n"
+        "    {\n"
+        "        if (assetManager == null || !assetManager.Valid())\n"
+        "            return [];\n"
+        "        using JString pathString = JNI.NewString(directory);\n"
+        "        using JClass assetManagerClass = JNI.GetObjectClass(assetManager);\n"
+        "        using JObjectArray<JString> assets = JNI.CallObjectMethod<JObjectArray<JString>>(assetManager, JNI.GetMethodID(assetManagerClass, \"list\", \"(Ljava/lang/String;)[Ljava/lang/String;\"), new JValue(pathString));\n"
+        "        HandleException();\n"
+        "        if (assets == null || !assets.Valid())\n"
+        "            return [];\n\n"
+        "        return [.. assets.Select(a => a.GetString())];\n"
+        "    }\n\n"
+        "    public static bool DoesAssetExist(string path)\n"
+        "    {\n"
+        "        if (assetManager == null || !assetManager.Valid())\n"
+        "            return false;\n"
+        "        int slash = path.LastIndexOf('/');\n"
+        "        string containingDir = slash >= 0 ? path[..slash] : \"\";\n"
+        "        string fileName = slash >= 0 ? path[(slash + 1)..] : path;\n"
+        "        using JString pathString = JNI.NewString(containingDir);\n"
+        "        using JClass assetManagerClass = JNI.GetObjectClass(assetManager);\n"
+        "        using JObjectArray<JString> assets = JNI.CallObjectMethod<JObjectArray<JString>>(assetManager, JNI.GetMethodID(assetManagerClass, \"list\", \"(Ljava/lang/String;)[Ljava/lang/String;\"), new JValue(pathString));\n"
+        "        HandleException();\n"
+        "        if (assets == null || !assets.Valid())\n"
+        "            return false;\n\n"
+        "        return assets.Any(js => string.Equals(JNI.GetJStringString(js), fileName, StringComparison.Ordinal));\n"
+        "    }",
+        "APKAssetManager.cs GetDirectoryContents + DoesAssetExist safe root/null handling",
+    )
+    aam_text = replace_once(
+        aam_text,
+        "    private static void GetAndroidAssetManager()\n"
+        "    {\n"
+        "        if (assetManager?.Valid() ?? false)\n"
+        "            return;\n\n"
+        "        using JClass unityClass = JNI.FindClass(\"com/unity3d/player/UnityPlayer\");\n"
+        "        JFieldID activityFieldId = JNI.GetStaticFieldID(unityClass, \"currentActivity\", \"Landroid/app/Activity;\");\n"
+        "        using JObject currentActivityObj = JNI.GetStaticObjectField<JObject>(unityClass, activityFieldId);\n"
+        "        using JClass activityClass = JNI.GetObjectClass(currentActivityObj);\n"
+        "        JObject assetManagerObj = JNI.CallObjectMethod<JObject>(currentActivityObj, JNI.GetMethodID(activityClass, \"getAssets\", \"()Landroid/content/res/AssetManager;\"));\n\n"
+        "        HandleException();\n\n"
+        "        assetManager = assetManagerObj;\n"
+        "    }",
+        "    private static JObject? TryGetAndroidContext()\n"
+        "    {\n"
+        "        using JClass unityClass = JNI.FindClass(\"com/unity3d/player/UnityPlayer\");\n"
+        "        HandleException();\n"
+        "        if (unityClass.Valid())\n"
+        "        {\n"
+        "            JFieldID activityFieldId = JNI.GetStaticFieldID(unityClass, \"currentActivity\", \"Landroid/app/Activity;\");\n"
+        "            HandleException();\n"
+        "            if (activityFieldId.Handle != IntPtr.Zero)\n"
+        "            {\n"
+        "                JObject act = JNI.GetStaticObjectField<JObject>(unityClass, activityFieldId);\n"
+        "                HandleException();\n"
+        "                if (act != null && act.Valid())\n"
+        "                    return act;\n"
+        "                act?.Dispose();\n"
+        "            }\n"
+        "        }\n\n"
+        "        using JClass activityThread = JNI.FindClass(\"android/app/ActivityThread\");\n"
+        "        HandleException();\n"
+        "        if (activityThread.Valid())\n"
+        "        {\n"
+        "            JMethodID curAppId = JNI.GetStaticMethodID(activityThread, \"currentApplication\", \"()Landroid/app/Application;\");\n"
+        "            HandleException();\n"
+        "            if (curAppId.Handle != IntPtr.Zero)\n"
+        "            {\n"
+        "                JObject app = JNI.CallStaticObjectMethod<JObject>(activityThread, curAppId);\n"
+        "                HandleException();\n"
+        "                if (app != null && app.Valid())\n"
+        "                    return app;\n"
+        "                app?.Dispose();\n"
+        "            }\n"
+        "        }\n\n"
+        "        using JClass appGlobals = JNI.FindClass(\"android/app/AppGlobals\");\n"
+        "        HandleException();\n"
+        "        if (appGlobals.Valid())\n"
+        "        {\n"
+        "            JMethodID initAppId = JNI.GetStaticMethodID(appGlobals, \"getInitialApplication\", \"()Landroid/app/Application;\");\n"
+        "            HandleException();\n"
+        "            if (initAppId.Handle != IntPtr.Zero)\n"
+        "            {\n"
+        "                JObject app = JNI.CallStaticObjectMethod<JObject>(appGlobals, initAppId);\n"
+        "                HandleException();\n"
+        "                if (app != null && app.Valid())\n"
+        "                    return app;\n"
+        "                app?.Dispose();\n"
+        "            }\n"
+        "        }\n\n"
+        "        return null;\n"
+        "    }\n\n"
+        "    private static void GetAndroidAssetManager()\n"
+        "    {\n"
+        "        if (assetManager?.Valid() ?? false)\n"
+        "            return;\n\n"
+        "        using JObject? contextObj = TryGetAndroidContext();\n"
+        "        if (contextObj == null || !contextObj.Valid())\n"
+        "            return;\n\n"
+        "        using JClass contextClass = JNI.GetObjectClass(contextObj);\n"
+        "        HandleException();\n"
+        "        JMethodID getAssetsId = JNI.GetMethodID(contextClass, \"getAssets\", \"()Landroid/content/res/AssetManager;\");\n"
+        "        HandleException();\n"
+        "        if (getAssetsId.Handle == IntPtr.Zero)\n"
+        "            return;\n\n"
+        "        JObject assetManagerObj = JNI.CallObjectMethod<JObject>(contextObj, getAssetsId);\n"
+        "        HandleException();\n"
+        "        if (assetManagerObj != null && assetManagerObj.Valid())\n"
+        "            assetManager = assetManagerObj;\n"
+        "    }",
+        "APKAssetManager.cs TryGetAndroidContext fallback",
+    )
+    write_utf8(aam_path, aam_text)
+    print("[patched] MelonLoader/JNI/JObject.cs, JNI.cs, and APKAssetManager.cs")
 
 
 def write_early_crash_c_helper(root: Path) -> None:
@@ -184,7 +428,7 @@ void lemon_install_signal_handlers(const char *internal_log_path) {
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sigemptyset(&sa.sa_mask);
-    sa.sa_flags = SA_SIGINFO | SA_RESETHAND;
+    sa.sa_flags = SA_SIGINFO;
     sa.sa_sigaction = crash_signal_handler;
 
     sigaction(SIGSEGV, &sa, &g_old_sigsegv);
@@ -813,10 +1057,12 @@ public static class AndroidProxy
         EarlyLog.Checkpoint("proxy_jni", $"JNI_OnLoad entered vm=0x{vm:X}");
 
         JNI.Initialize(vm);
-        var nativeLoader = JNI.FindClass("com/unity3d/player/NativeLoader");
+        using var nativeLoader = JNI.FindClass("com/unity3d/player/NativeLoader");
+        if (JNI.ExceptionCheck())
+            JNI.ExceptionClear();
         if (!nativeLoader.Valid())
         {
-            EarlyLog.Checkpoint("proxy_jni", "ERROR cannot find com/unity3d/player/NativeLoader");
+            EarlyLog.Checkpoint("proxy_jni", "WARN cannot find com/unity3d/player/NativeLoader");
             Log("Cannot find NativeLoader class");
             return JNI.Version.V1_6;
         }
@@ -889,13 +1135,15 @@ public static class AndroidBootstrap
                 NativeLibrary.TryLoad(Path.Combine(AndroidProxy.NativeLibraryDir, "libmain.so"), out handle);
         }
         BootstrapHandle = handle;
-        Exports.InitializeAndroid(handle);
 
         DataDir = GetDataDir();
         EarlyLog.Init(PackageName);
         EarlyLog.Checkpoint("bootstrap", $"Package={PackageName} DataDir={DataDir}");
 
         EnsurePerms();
+        DataDir = EnsureWritableDataDir(DataDir, PackageName);
+        Exports.InitializeAndroid(handle);
+        EarlyLog.Checkpoint("bootstrap", $"Effective DataDir={DataDir}");
 
         EarlyLog.Checkpoint("bootstrap", "Initializing APKAssetManager");
         APKAssetManager.Initialize();
@@ -932,45 +1180,189 @@ public static class AndroidBootstrap
         return 1;
     }
 
+    private static void ClearJniException()
+    {
+        if (JNI.ExceptionCheck())
+            JNI.ExceptionClear();
+    }
+
+    private static (JObject? Context, bool IsActivity) TryGetContext()
+    {
+        try
+        {
+            using JClass unityPlayer = JNI.FindClass("com/unity3d/player/UnityPlayer");
+            ClearJniException();
+            if (unityPlayer.Valid())
+            {
+                JFieldID activityFieldId = JNI.GetStaticFieldID(unityPlayer, "currentActivity", "Landroid/app/Activity;");
+                ClearJniException();
+                if (activityFieldId.Handle != IntPtr.Zero)
+                {
+                    JObject act = JNI.GetStaticObjectField<JObject>(unityPlayer, activityFieldId);
+                    ClearJniException();
+                    if (act != null && act.Valid())
+                        return (act, true);
+                    act?.Dispose();
+                }
+            }
+
+            using JClass activityThread = JNI.FindClass("android/app/ActivityThread");
+            ClearJniException();
+            if (activityThread.Valid())
+            {
+                JMethodID curAppId = JNI.GetStaticMethodID(activityThread, "currentApplication", "()Landroid/app/Application;");
+                ClearJniException();
+                if (curAppId.Handle != IntPtr.Zero)
+                {
+                    JObject app = JNI.CallStaticObjectMethod<JObject>(activityThread, curAppId);
+                    ClearJniException();
+                    if (app != null && app.Valid())
+                        return (app, false);
+                    app?.Dispose();
+                }
+            }
+
+            using JClass appGlobals = JNI.FindClass("android/app/AppGlobals");
+            ClearJniException();
+            if (appGlobals.Valid())
+            {
+                JMethodID initAppId = JNI.GetStaticMethodID(appGlobals, "getInitialApplication", "()Landroid/app/Application;");
+                ClearJniException();
+                if (initAppId.Handle != IntPtr.Zero)
+                {
+                    JObject app = JNI.CallStaticObjectMethod<JObject>(appGlobals, initAppId);
+                    ClearJniException();
+                    if (app != null && app.Valid())
+                        return (app, false);
+                    app?.Dispose();
+                }
+            }
+        }
+        catch { }
+        return (null, false);
+    }
+
     public static string GetDataDir()
     {
-        JClass unityPlayer = JNI.FindClass("com/unity3d/player/UnityPlayer");
-        JFieldID activityFieldId = JNI.GetStaticFieldID(unityPlayer, "currentActivity", "Landroid/app/Activity;");
-        JObject currentActivityObj = JNI.GetStaticObjectField<JObject>(unityPlayer, activityFieldId);
-        var pkgCall = JNI.CallObjectMethod<JString>(
-            currentActivityObj,
-            JNI.GetMethodID(JNI.GetObjectClass(currentActivityObj), "getPackageName", "()Ljava/lang/String;"));
-        PackageName = pkgCall.GetString();
+        string? pkg = null;
+        string extPath = "/sdcard";
 
-        JClass environment = JNI.FindClass("android/os/Environment");
-        var getExtDir = JNI.CallStaticObjectMethod<JObject>(
-            environment,
-            JNI.GetStaticMethodID(environment, "getExternalStorageDirectory", "()Ljava/io/File;"));
-        var toStringId = JNI.GetMethodID(JNI.GetObjectClass(getExtDir), "toString", "()Ljava/lang/String;");
-        var extPath = JNI.CallObjectMethod<JString>(getExtDir, toStringId).GetString();
+        try
+        {
+            var (ctx, _) = TryGetContext();
+            using (ctx)
+            {
+                if (ctx != null && ctx.Valid())
+                {
+                    using JClass ctxCls = JNI.GetObjectClass(ctx);
+                    ClearJniException();
+                    JMethodID getPkgId = JNI.GetMethodID(ctxCls, "getPackageName", "()Ljava/lang/String;");
+                    ClearJniException();
+                    if (getPkgId.Handle != IntPtr.Zero)
+                    {
+                        using JString pkgCall = JNI.CallObjectMethod<JString>(ctx, getPkgId);
+                        ClearJniException();
+                        if (pkgCall != null && pkgCall.Valid())
+                            pkg = pkgCall.GetString();
+                    }
+                }
+            }
+        }
+        catch { }
+
+        if (string.IsNullOrWhiteSpace(pkg))
+            pkg = EarlyLog.ReadPackageNameFromCmdline() ?? "com.unity.app";
+
+        PackageName = pkg.Trim();
+
+        try
+        {
+            using JClass environment = JNI.FindClass("android/os/Environment");
+            ClearJniException();
+            if (environment.Valid())
+            {
+                JMethodID getExtId = JNI.GetStaticMethodID(environment, "getExternalStorageDirectory", "()Ljava/io/File;");
+                ClearJniException();
+                if (getExtId.Handle != IntPtr.Zero)
+                {
+                    using JObject extObj = JNI.CallStaticObjectMethod<JObject>(environment, getExtId);
+                    ClearJniException();
+                    if (extObj != null && extObj.Valid())
+                    {
+                        using JClass fileCls = JNI.GetObjectClass(extObj);
+                        ClearJniException();
+                        JMethodID toStrId = JNI.GetMethodID(fileCls, "toString", "()Ljava/lang/String;");
+                        ClearJniException();
+                        if (toStrId.Handle != IntPtr.Zero)
+                        {
+                            using JString extStr = JNI.CallObjectMethod<JString>(extObj, toStrId);
+                            ClearJniException();
+                            if (extStr != null && extStr.Valid())
+                            {
+                                string candidate = extStr.GetString();
+                                if (!string.IsNullOrWhiteSpace(candidate))
+                                    extPath = candidate;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        catch { }
 
         return Path.Combine(extPath, "MelonLoader", PackageName);
+    }
+
+    private static string EnsureWritableDataDir(string preferredDir, string pkg)
+    {
+        try
+        {
+            Directory.CreateDirectory(preferredDir);
+            string probe = Path.Combine(preferredDir, ".lemon_write_probe");
+            File.WriteAllText(probe, "ok");
+            File.Delete(probe);
+            return preferredDir;
+        }
+        catch (Exception ex)
+        {
+            string fallback = $"/data/data/{pkg}/files/MelonLoader";
+            EarlyLog.Checkpoint("bootstrap", $"WARN external DataDir not writable ({ex.Message}); falling back to {fallback}");
+            try { Directory.CreateDirectory(fallback); } catch { }
+            return fallback;
+        }
     }
 
     public static bool EnsurePerms()
     {
         try
         {
-            JClass buildVersion = JNI.FindClass("android/os/Build$VERSION");
-            int sdkInt = JNI.GetStaticField<int>(buildVersion, JNI.GetStaticFieldID(buildVersion, "SDK_INT", "I"));
+            using JClass buildVersion = JNI.FindClass("android/os/Build$VERSION");
+            ClearJniException();
+            if (!buildVersion.Valid())
+                return true;
+
+            JFieldID sdkIntId = JNI.GetStaticFieldID(buildVersion, "SDK_INT", "I");
+            ClearJniException();
+            int sdkInt = sdkIntId.Handle != IntPtr.Zero ? JNI.GetStaticField<int>(buildVersion, sdkIntId) : 0;
+            ClearJniException();
             if (sdkInt < 30)
                 return true;
 
-            const int TRIES = 3;
-            const int DELAY = 5000;
+            const int TRIES = 2;
+            const int DELAY = 3000;
             for (int i = 0; i < TRIES; i++)
             {
-                JClass unityPlayer = JNI.FindClass("com/unity3d/player/UnityPlayer");
-                JFieldID activityFieldId = JNI.GetStaticFieldID(unityPlayer, "currentActivity", "Landroid/app/Activity;");
-                JObject currentActivityObj = JNI.GetStaticObjectField<JObject>(unityPlayer, activityFieldId);
+                using JClass environment = JNI.FindClass("android/os/Environment");
+                ClearJniException();
+                if (!environment.Valid())
+                    return false;
 
-                JClass environment = JNI.FindClass("android/os/Environment");
-                bool hasPerm = JNI.CallStaticMethod<bool>(environment, environment.GetStaticMethodID("isExternalStorageManager", "()Z"));
+                JMethodID isExtMgrId = environment.GetStaticMethodID("isExternalStorageManager", "()Z");
+                ClearJniException();
+                if (isExtMgrId.Handle == IntPtr.Zero)
+                    return false;
+
+                bool hasPerm = JNI.CallStaticMethod<bool>(environment, isExtMgrId);
                 if (JNI.ExceptionCheck())
                 {
                     JNI.ExceptionClear();
@@ -983,20 +1375,59 @@ public static class AndroidBootstrap
                     return true;
                 }
 
-                EarlyLog.Checkpoint("perms", $"Requesting MANAGE_EXTERNAL_STORAGE (attempt {i + 1}/{TRIES})");
-                JClass uri = JNI.FindClass("android/net/Uri");
-                JClass intent = JNI.FindClass("android/content/Intent");
-                var actionName = JNI.NewString("android.settings.MANAGE_APP_ALL_FILES_ACCESS_PERMISSION");
-                var packageName = JNI.NewString($"package:{PackageName}");
-                var uriObj = JNI.CallStaticObjectMethod<JObject>(uri, uri.GetStaticMethodID("parse", "(Ljava/lang/String;)Landroid/net/Uri;"), packageName);
-                JMethodID intentConstructor = JNI.GetMethodID(intent, "<init>", "(Ljava/lang/String;Landroid/net/Uri;)V");
-                var intentObj = JNI.NewObject<JObject>(intent, intentConstructor, actionName, uriObj);
-                var activityClass = JNI.GetObjectClass(currentActivityObj);
-                activityClass.CallVoidMethod(currentActivityObj, "startActivity", "(Landroid/content/Intent;)V", intentObj);
-                if (JNI.ExceptionCheck())
+                var (ctx, isActivity) = TryGetContext();
+                using (ctx)
                 {
-                    JNI.ExceptionClear();
-                    return false;
+                    if (ctx == null || !ctx.Valid())
+                    {
+                        EarlyLog.Checkpoint("perms", "WARN no Android Context available for MANAGE_EXTERNAL_STORAGE prompt");
+                        return false;
+                    }
+
+                    EarlyLog.Checkpoint("perms", $"Requesting MANAGE_EXTERNAL_STORAGE (attempt {i + 1}/{TRIES})");
+                    using JClass uri = JNI.FindClass("android/net/Uri");
+                    using JClass intent = JNI.FindClass("android/content/Intent");
+                    ClearJniException();
+                    if (!uri.Valid() || !intent.Valid())
+                        return false;
+
+                    using var actionName = JNI.NewString("android.settings.MANAGE_APP_ALL_FILES_ACCESS_PERMISSION");
+                    using var packageName = JNI.NewString($"package:{PackageName}");
+                    using var uriObj = JNI.CallStaticObjectMethod<JObject>(uri, uri.GetStaticMethodID("parse", "(Ljava/lang/String;)Landroid/net/Uri;"), packageName);
+                    ClearJniException();
+                    if (uriObj == null || !uriObj.Valid())
+                        return false;
+
+                    JMethodID intentConstructor = JNI.GetMethodID(intent, "<init>", "(Ljava/lang/String;Landroid/net/Uri;)V");
+                    ClearJniException();
+                    if (intentConstructor.Handle == IntPtr.Zero)
+                        return false;
+
+                    using var intentObj = JNI.NewObject<JObject>(intent, intentConstructor, actionName, uriObj);
+                    ClearJniException();
+                    if (intentObj == null || !intentObj.Valid())
+                        return false;
+
+                    if (!isActivity)
+                    {
+                        JMethodID addFlagsId = JNI.GetMethodID(intent, "addFlags", "(I)Landroid/content/Intent;");
+                        ClearJniException();
+                        if (addFlagsId.Handle != IntPtr.Zero)
+                        {
+                            using var _ = JNI.CallObjectMethod<JObject>(intentObj, addFlagsId, 0x10000000);
+                            ClearJniException();
+                        }
+                    }
+
+                    using var ctxClass = JNI.GetObjectClass(ctx);
+                    ClearJniException();
+                    ctxClass.CallVoidMethod(ctx, "startActivity", "(Landroid/content/Intent;)V", intentObj);
+                    if (JNI.ExceptionCheck())
+                    {
+                        JNI.ExceptionClear();
+                        EarlyLog.Checkpoint("perms", "WARN startActivity threw JNI exception");
+                        return false;
+                    }
                 }
 
                 Thread.Sleep(DELAY);
@@ -1689,6 +2120,20 @@ def patch_managed_melonloader(root: Path) -> None:
         "#endif\n"
         "#endif",
         "LoaderConfig.cs Android DataDir",
+    )
+    lc_text = replace_once(
+        lc_text,
+        "        var userDataFolder = Path.Combine(baseDir, \"UserData\");\n"
+        "        if (!Directory.Exists(userDataFolder))\n"
+        "            Directory.CreateDirectory(userDataFolder);",
+        "        var userDataFolder = Path.Combine(baseDir, \"UserData\");\n"
+        "        try\n"
+        "        {\n"
+        "            if (!Directory.Exists(userDataFolder))\n"
+        "                Directory.CreateDirectory(userDataFolder);\n"
+        "        }\n"
+        "        catch { }",
+        "LoaderConfig.cs guard CreateDirectory",
     )
     lc_text = replace_once(
         lc_text,

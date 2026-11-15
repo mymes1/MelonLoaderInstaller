@@ -88,7 +88,9 @@ internal class PatchManifest : IPatchStep
 
     private void AddApplicationFlags(AxmlElement manifest)
     {
-        AxmlElement appElement = manifest.Children.Single(element => element.Name == "application");
+        AxmlElement? appElement = manifest.Children.FirstOrDefault(element => element.Name == "application");
+        if (appElement == null)
+            return;
         if (!appElement.Attributes.Any(attribute => attribute.Name == "debuggable"))
         {
             _logger!.Log("Adding debuggable flag");

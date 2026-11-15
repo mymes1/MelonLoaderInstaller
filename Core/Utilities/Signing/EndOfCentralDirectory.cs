@@ -1,50 +1,49 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+using System;
 
 namespace MelonLoader.Installer.Core.Utilities.Signing
 {
     public class EndOfCentralDirectory
     {
-
         public static readonly int SIGNATURE = 0x06054b50;
-        public short NumberOfDisk { get; set; }
-        public short CDStartDisk { get; set; }
-        public short NumberOfCDsOnDisk { get; set; }
-        public short NumberOfCDs { get; set; }
-        public int SizeOfCD { get; set; }
-        public int OffsetOfCD { get; set; }
-        public string Comment { get; set; }
+        public ushort NumberOfDisk { get; set; }
+        public ushort CDStartDisk { get; set; }
+        public ushort NumberOfCDsOnDisk { get; set; }
+        public ushort NumberOfCDs { get; set; }
+        public uint SizeOfCD { get; set; }
+        public uint OffsetOfCD { get; set; }
+        public byte[] CommentBytes { get; set; }
+        public string Comment
+        {
+            get => System.Text.Encoding.UTF8.GetString(CommentBytes);
+            set => CommentBytes = System.Text.Encoding.UTF8.GetBytes(value ?? "");
+        }
 
         public EndOfCentralDirectory(FileMemory memory)
         {
             int signature = memory.ReadInt();
-            if(signature != SIGNATURE)
+            if (signature != SIGNATURE)
                 throw new Exception("Invalid EndOfCentralDirectory signature " + signature.ToString("X4"));
-            NumberOfDisk = memory.ReadShort();
-            CDStartDisk = memory.ReadShort();
-            NumberOfCDsOnDisk = memory.ReadShort();
-            NumberOfCDs = memory.ReadShort();
-            SizeOfCD = memory.ReadInt();
-            OffsetOfCD = memory.ReadInt();
-            var commentLength = memory.ReadShort();
-            Comment = memory.ReadString(commentLength);
+            NumberOfDisk = memory.ReadUShort();
+            CDStartDisk = memory.ReadUShort();
+            NumberOfCDsOnDisk = memory.ReadUShort();
+            NumberOfCDs = memory.ReadUShort();
+            SizeOfCD = memory.ReadUInt();
+            OffsetOfCD = memory.ReadUInt();
+            ushort commentLength = memory.ReadUShort();
+            CommentBytes = memory.ReadBytes(commentLength);
         }
 
         public void Write(FileMemory memory)
         {
             memory.WriteInt(SIGNATURE);
-            memory.WriteShort(NumberOfDisk);
-            memory.WriteShort(CDStartDisk);
-            memory.WriteShort(NumberOfCDsOnDisk);
-            memory.WriteShort(NumberOfCDs);
-            memory.WriteInt(SizeOfCD);
-            memory.WriteInt(OffsetOfCD);
-            memory.WriteShort((short)FileMemory.StringLength(Comment));
-            memory.WriteString(Comment);
+            memory.WriteUShort(NumberOfDisk);
+            memory.WriteUShort(CDStartDisk);
+            memory.WriteUShort(NumberOfCDsOnDisk);
+            memory.WriteUShort(NumberOfCDs);
+            memory.WriteUInt(SizeOfCD);
+            memory.WriteUInt(OffsetOfCD);
+            memory.WriteUShort((ushort)CommentBytes.Length);
+            memory.WriteBytes(CommentBytes);
         }
-
     }
 }

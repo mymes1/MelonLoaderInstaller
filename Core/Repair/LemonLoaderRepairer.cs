@@ -358,18 +358,21 @@ public static class LemonLoaderRepairer
             manifest.Children.Add(elem);
         }
 
-        var appElem = manifest.Children.Single(e => e.Name == "application");
-        if (!appElem.Attributes.Any(a => a.Name == "debuggable"))
-            appElem.Attributes.Add(new("debuggable", androidNs, debuggableAttrId, true));
+        var appElem = manifest.Children.FirstOrDefault(e => e.Name == "application");
+        if (appElem != null)
+        {
+            if (!appElem.Attributes.Any(a => a.Name == "debuggable"))
+                appElem.Attributes.Add(new("debuggable", androidNs, debuggableAttrId, true));
 
-        if (!appElem.Attributes.Any(a => a.Name == "requestLegacyExternalStorage"))
-            appElem.Attributes.Add(new("requestLegacyExternalStorage", androidNs, legacyStorageAttrId, true));
+            if (!appElem.Attributes.Any(a => a.Name == "requestLegacyExternalStorage"))
+                appElem.Attributes.Add(new("requestLegacyExternalStorage", androidNs, legacyStorageAttrId, true));
 
-        var extract = appElem.Attributes.FirstOrDefault(a => a.Name == "extractNativeLibs");
-        if (extract != null)
-            extract.Value = true;
-        else
-            appElem.Attributes.Add(new("extractNativeLibs", androidNs, extractNativeLibsAttrId, true));
+            var extract = appElem.Attributes.FirstOrDefault(a => a.Name == "extractNativeLibs");
+            if (extract != null)
+                extract.Value = true;
+            else
+                appElem.Attributes.Add(new("extractNativeLibs", androidNs, extractNativeLibsAttrId, true));
+        }
 
         using MemoryStream outMs = new();
         AxmlSaver.SaveDocument(outMs, manifest);
@@ -402,7 +405,10 @@ public static class LemonLoaderRepairer
                 e.FullName.Replace('\\', '/').Equals(entryPath, StringComparison.OrdinalIgnoreCase));
             existing?.Delete();
 
-            var entry = archive.CreateEntry(entryPath, CompressionLevel.Optimal);
+            CompressionLevel level = file.EndsWith(".so", StringComparison.OrdinalIgnoreCase)
+                ? CompressionLevel.NoCompression
+                : CompressionLevel.Optimal;
+            var entry = archive.CreateEntry(entryPath, level);
             using var src = File.OpenRead(file);
             using var dst = entry.Open();
             src.CopyTo(dst);

@@ -48,19 +48,20 @@ IAE6kTSMMHC6bVbrbS/CC8hRW8m7yD3LUa1EjFJmRWXsCQ==
     {
         patcher.Logger.Log("Generating certificate");
 
+        SecureRandom random = SecureRandom.GetInstance("SHA256PRNG");
         RsaKeyPairGenerator kpg = new();
-        kpg.Init(new KeyGenerationParameters(SecureRandom.GetInstance("SHA256PRNG"), 2048));
+        kpg.Init(new KeyGenerationParameters(random, 2048));
 
         AsymmetricCipherKeyPair keyPair = kpg.GenerateKeyPair();
 
         X509V3CertificateGenerator certificateGenerator = new();
-        BigInteger serialNumber = BigInteger.ProbablePrime(120, new Random());
+        BigInteger serialNumber = BigInteger.ProbablePrime(120, random);
         X509Name issuerDN = new("CN=lemon");
         X509Name subjectDN = new("CN=lemon");
         certificateGenerator.SetSerialNumber(serialNumber);
         certificateGenerator.SetIssuerDN(issuerDN);
         certificateGenerator.SetSubjectDN(subjectDN);
-        certificateGenerator.SetNotBefore(DateTime.UtcNow.Date.AddDays(-1));
+        certificateGenerator.SetNotBefore(DateTime.UtcNow.Date.AddDays(-2));
         certificateGenerator.SetNotAfter(DateTime.UtcNow.Date.AddYears(30));
         certificateGenerator.SetPublicKey(keyPair.Public);
 

@@ -1,36 +1,58 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
 namespace MelonLoader.Installer.Core.Utilities.Signing
 {
     public class DataDescriptor
     {
         public static readonly int SIGNATURE = 0x08074b50;
 
-        public int CRC32 { get; set; }
-        public int CompressedSize { get; set; }
-        public int UncompressedSize { get; set; }
+        public bool HasSignature { get; set; }
+        public bool IsZip64 { get; set; }
+        public uint CRC32 { get; set; }
+        public ulong CompressedSize { get; set; }
+        public ulong UncompressedSize { get; set; }
 
-        public DataDescriptor(FileMemory memory)
+        public DataDescriptor(FileMemory memory, bool isZip64 = false)
         {
-            int signature = memory.ReadInt();
-            if(signature != SIGNATURE)
-                throw new Exception("Invalid DataDescriptor signature " + signature.ToString("X4"));
-            CRC32 = memory.ReadInt();
-            CompressedSize = memory.ReadInt();
-            UncompressedSize = memory.ReadInt();
+            IsZip64 = isZip64;
+            int first = memory.ReadInt();
+            if (first == SIGNATURE)
+            {
+                HasSignature = true;
+                CRC32 = memory.ReadUInt();
+            }
+            else
+            {
+                // ZIP spec allows Data Descriptor without the optional 0x08074b50 magic
+                HasSignature = false;
+                CRC32 = unchecked((uint)first);
+            }
+
+            if (isZip64)
+            {
+                CompressedSize = memory.ReadULong();
+                UncompressedSize = memory.ReadULong();
+            }
+            else
+            {
+                CompressedSize = memory.ReadUInt();
+                UncompressedSize = memory.ReadUInt();
+            }
         }
 
         public void Write(FileMemory memory)
         {
-            memory.WriteInt(SIGNATURE);
-            memory.WriteInt(CRC32);
-            memory.WriteInt(CompressedSize);
-            memory.WriteInt(UncompressedSize);
+            if (HasSignature)
+                memory.WriteInt(SIGNATURE);
+            memory.WriteUInt(CRC32);
+            if (IsZip64)
+            {
+                memory.WriteULong(CompressedSize);
+                memory.WriteULong(UncompressedSize);
+            }
+            else
+            {
+                memory.WriteUInt((uint)CompressedSize);
+                memory.WriteUInt((uint)UncompressedSize);
+            }
         }
-
     }
 }

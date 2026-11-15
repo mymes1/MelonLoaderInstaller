@@ -1,79 +1,86 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
+using System;
 using System.Text;
-using System.Threading.Tasks;
 
 namespace MelonLoader.Installer.Core.Utilities.Signing
 {
     public class CentralDirectoryFileHeader
     {
         public static readonly int SIGNATURE = 0x02014b50;
-        public short VersionMadeBy { get; set; }
-        public short VersionNeeded { get; set; }
-        public short GeneralPurposeFlag { get; set; }
-        public short CompressionMethod { get; set; }
-        public short FileLastModificationTime { get; set; }
-        public short FileLastModificationDate { get; set; }
-        public int CRC32 { get; set; }
-        public int CompressedSize { get; set; }
-        public int UncompressedSize { get; set; }
-        public short DiskNumberFileStart { get; set; }
-        public short InternalFileAttributes { get; set; }
-        public int ExternalFileAttributes { get; set; }
-        public int Offset { get; set; }
-        public string FileName { get; set; }
+        public ushort VersionMadeBy { get; set; }
+        public ushort VersionNeeded { get; set; }
+        public ushort GeneralPurposeFlag { get; set; }
+        public ushort CompressionMethod { get; set; }
+        public ushort FileLastModificationTime { get; set; }
+        public ushort FileLastModificationDate { get; set; }
+        public uint CRC32 { get; set; }
+        public uint CompressedSize { get; set; }
+        public uint UncompressedSize { get; set; }
+        public ushort DiskNumberFileStart { get; set; }
+        public ushort InternalFileAttributes { get; set; }
+        public uint ExternalFileAttributes { get; set; }
+        public uint Offset { get; set; }
+        public byte[] FileNameBytes { get; set; }
+        public string FileName
+        {
+            get => Encoding.UTF8.GetString(FileNameBytes);
+            set => FileNameBytes = Encoding.UTF8.GetBytes(value ?? "");
+        }
         public byte[] ExtraField { get; set; }
-        public string FileComment { get; set; }
+        public byte[] FileCommentBytes { get; set; }
+        public string FileComment
+        {
+            get => Encoding.UTF8.GetString(FileCommentBytes);
+            set => FileCommentBytes = Encoding.UTF8.GetBytes(value ?? "");
+        }
 
         public CentralDirectoryFileHeader(FileMemory memory)
         {
             int signature = memory.ReadInt();
-            if(signature != SIGNATURE)
+            if (signature != SIGNATURE)
                 throw new Exception("Invalid CentralDirectoryFileHeader signature " + signature.ToString("X4"));
-            VersionMadeBy = memory.ReadShort();
-            VersionNeeded = memory.ReadShort();
-            GeneralPurposeFlag = memory.ReadShort();
-            CompressionMethod = memory.ReadShort();
-            FileLastModificationTime = memory.ReadShort();
-            FileLastModificationDate = memory.ReadShort();
-            CRC32 = memory.ReadInt();
-            CompressedSize = memory.ReadInt();
-            UncompressedSize = memory.ReadInt();
-            var fileNameLength = memory.ReadShort();
-            var extraFieldLength = memory.ReadShort();
-            var fileCommentLength = memory.ReadShort();
-            DiskNumberFileStart = memory.ReadShort();
-            InternalFileAttributes = memory.ReadShort();
-            ExternalFileAttributes = memory.ReadInt();
-            Offset = memory.ReadInt();
-            FileName = memory.ReadString(fileNameLength);
+            VersionMadeBy = memory.ReadUShort();
+            VersionNeeded = memory.ReadUShort();
+            GeneralPurposeFlag = memory.ReadUShort();
+            CompressionMethod = memory.ReadUShort();
+            FileLastModificationTime = memory.ReadUShort();
+            FileLastModificationDate = memory.ReadUShort();
+            CRC32 = memory.ReadUInt();
+            CompressedSize = memory.ReadUInt();
+            UncompressedSize = memory.ReadUInt();
+            ushort fileNameLength = memory.ReadUShort();
+            ushort extraFieldLength = memory.ReadUShort();
+            ushort fileCommentLength = memory.ReadUShort();
+            DiskNumberFileStart = memory.ReadUShort();
+            InternalFileAttributes = memory.ReadUShort();
+            ExternalFileAttributes = memory.ReadUInt();
+            Offset = memory.ReadUInt();
+            FileNameBytes = memory.ReadBytes(fileNameLength);
             ExtraField = memory.ReadBytes(extraFieldLength);
-            FileComment = memory.ReadString(fileCommentLength);
+            FileCommentBytes = memory.ReadBytes(fileCommentLength);
         }
 
         public void Write(FileMemory memory)
         {
             memory.WriteInt(SIGNATURE);
-            memory.WriteShort(VersionMadeBy);
-            memory.WriteShort(VersionNeeded);
-            memory.WriteShort(GeneralPurposeFlag);
-            memory.WriteShort(CompressionMethod);
-            memory.WriteShort(FileLastModificationTime);
-            memory.WriteShort(FileLastModificationDate);
-            memory.WriteInt(CRC32);
-            memory.WriteInt(CompressedSize);
-            memory.WriteInt(UncompressedSize);
-            memory.WriteShort((short)FileMemory.StringLength(FileName));
-            memory.WriteShort((short)ExtraField.Length);
-            memory.WriteShort((short) FileMemory.StringLength(FileComment));
-            memory.WriteShort(DiskNumberFileStart);
-            memory.WriteShort(InternalFileAttributes);
-            memory.WriteInt(ExternalFileAttributes);
-            memory.WriteInt(Offset);
-            memory.WriteString(FileName);
+            memory.WriteUShort(VersionMadeBy);
+            memory.WriteUShort(VersionNeeded);
+            memory.WriteUShort(GeneralPurposeFlag);
+            memory.WriteUShort(CompressionMethod);
+            memory.WriteUShort(FileLastModificationTime);
+            memory.WriteUShort(FileLastModificationDate);
+            memory.WriteUInt(CRC32);
+            memory.WriteUInt(CompressedSize);
+            memory.WriteUInt(UncompressedSize);
+            memory.WriteUShort((ushort)FileNameBytes.Length);
+            memory.WriteUShort((ushort)ExtraField.Length);
+            memory.WriteUShort((ushort)FileCommentBytes.Length);
+            memory.WriteUShort(DiskNumberFileStart);
+            memory.WriteUShort(InternalFileAttributes);
+            memory.WriteUInt(ExternalFileAttributes);
+            memory.WriteUInt(Offset);
+            memory.WriteBytes(FileNameBytes);
             memory.WriteBytes(ExtraField);
-            memory.WriteString(FileComment);
+            memory.WriteBytes(FileCommentBytes);
         }
     }
 }

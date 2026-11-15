@@ -1,8 +1,5 @@
-﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace MelonLoader.Installer.Core.Utilities.Signing
 {
@@ -10,7 +7,6 @@ namespace MelonLoader.Installer.Core.Utilities.Signing
     {
         public class IDValuePair
         {
-
             public uint ID { get; private set; }
             public int Value { get; private set; }
             public byte[]? Data { get; private set; }
@@ -31,25 +27,26 @@ namespace MelonLoader.Installer.Core.Utilities.Signing
 
             public int Length()
             {
-                return 8 + 4 + Data?.Length ?? 4;
+                return 8 + 4 + (Data?.Length ?? 4);
             }
 
             public void Write(FileMemory memory)
             {
-                memory.WriteULong((ulong) Length() - 8);
+                memory.WriteULong((ulong)Length() - 8);
                 memory.WriteUInt(ID);
-                if(Data == null)
+                if (Data == null)
                 {
                     memory.WriteInt(Value);
-                } else
+                }
+                else
                 {
                     memory.WriteBytes(Data);
                 }
             }
-
         }
 
         public static readonly string MAGIC = "APK Sig Block 42";
+        public static readonly uint VERITY_PADDING_BLOCK_ID = 0x42726577;
 
         public List<IDValuePair> Values { get; private set; }
 
@@ -58,14 +55,32 @@ namespace MelonLoader.Installer.Core.Utilities.Signing
             Values = new List<IDValuePair>();
         }
 
+        public ulong TotalByteLength()
+        {
+            return (ulong)Values.Sum(v => (long)v.Length()) + 32UL;
+        }
+
+        public void PadToMultiple(int alignment = 4096)
+        {
+            ulong total = TotalByteLength();
+            ulong rem = total % (ulong)alignment;
+            if (rem == 0)
+                return;
+
+            ulong needed = (ulong)alignment - rem;
+            if (needed < 12)
+                needed += (ulong)alignment;
+
+            Values.Add(new IDValuePair(VERITY_PADDING_BLOCK_ID, new byte[(int)(needed - 12)]));
+        }
+
         public void Write(FileMemory memory)
         {
-            ulong size = (ulong) Values.Sum(values => values.Length()) + 8 + 16;
+            ulong size = (ulong)Values.Sum(values => (long)values.Length()) + 8UL + 16UL;
             memory.WriteULong(size);
             Values.ForEach(value => value.Write(memory));
             memory.WriteULong(size);
             memory.WriteString(MAGIC);
         }
-
     }
 }

@@ -220,9 +220,60 @@ public sealed class InstallerTests : IDisposable
         Assert.True(postAnalysis.HasLibDobby);
         Assert.True(postAnalysis.HasMelonLoaderAssets);
         Assert.True(postAnalysis.HasDotnetAssets);
+        AssertAllStoredSoEntriesAre16KbAligned(patchedApk);
 
         var postDiag = LemonDataDiagnostics.Inspect(patchedApk);
         Assert.True(postDiag.IsHealthy, postDiag.FormatReport());
+    }
+
+    [Fact]
+    public void ApkAlignerAndSigner_AlignsNativeLibsTo16Kb_StripsStaleV1_AndEmitsV2V3SigningBlock()
+    {
+        string apkPath = Path.Combine(_workDir, "unaligned_v1_stale.apk");
+        byte[] arm64Elf = CreateFakeArm64Elf();
+
+        using (var fs = File.Create(apkPath))
+        using (var zip = new ZipArchive(fs, ZipArchiveMode.Create))
+        {
+            void Add(string name, byte[] data, CompressionLevel level)
+            {
+                var e = zip.CreateEntry(name, level);
+                using var s = e.Open();
+                s.Write(data);
+            }
+
+            Add("AndroidManifest.xml", Encoding.UTF8.GetBytes("manifest-placeholder"), CompressionLevel.Optimal);
+            Add("META-INF/MANIFEST.MF", Encoding.UTF8.GetBytes("Manifest-Version: 1.0\r\n"), CompressionLevel.Optimal);
+            Add("META-INF/CERT.SF", Encoding.UTF8.GetBytes("Signature-Version: 1.0\r\n"), CompressionLevel.Optimal);
+            Add("META-INF/CERT.RSA", new byte[128], CompressionLevel.Optimal);
+            Add("META-INF/services/com.example.TestService", Encoding.UTF8.GetBytes("com.example.Impl"), CompressionLevel.Optimal);
+            Add("lib/arm64-v8a/libunity.so", arm64Elf, CompressionLevel.NoCompression);
+            Add("lib/arm64-v8a/libmain.so", arm64Elf, CompressionLevel.NoCompression);
+            Add("assets/data.txt", Encoding.UTF8.GetBytes("hello-world"), CompressionLevel.Optimal);
+        }
+
+        string signedOnce = Path.Combine(_workDir, "signed_once.apk");
+        var logger = new ListLogger();
+        Core.Repair.StandaloneApkSigner.SignApk(apkPath, signedOnce, logger);
+
+        // Re-signing an already signed APK must cleanly strip the previous APK Signing Block and re-align
+        string signedTwice = Path.Combine(_workDir, "signed_twice.apk");
+        Core.Repair.StandaloneApkSigner.SignApk(signedOnce, signedTwice, logger);
+
+        foreach (string signedPath in new[] { signedOnce, signedTwice })
+        {
+            AssertAllStoredSoEntriesAre16KbAligned(signedPath);
+            AssertApkSigningBlockHasV2AndV3(signedPath);
+
+            using var fs = File.OpenRead(signedPath);
+            using var zip = new ZipArchive(fs, ZipArchiveMode.Read);
+            Assert.Null(zip.GetEntry("META-INF/MANIFEST.MF"));
+            Assert.Null(zip.GetEntry("META-INF/CERT.SF"));
+            Assert.Null(zip.GetEntry("META-INF/CERT.RSA"));
+            Assert.NotNull(zip.GetEntry("META-INF/services/com.example.TestService"));
+            Assert.NotNull(zip.GetEntry("lib/arm64-v8a/libunity.so"));
+            Assert.NotNull(zip.GetEntry("lib/arm64-v8a/libmain.so"));
+        }
     }
 
     [Fact]
@@ -748,5 +799,94 @@ public sealed class InstallerTests : IDisposable
         using var writer = new AssetsFileWriter(ms);
         assetsFile.Write(writer, 0, [], null!);
         return ms.ToArray();
+    }
+
+    private static long FindEocdOffset(FileStream fs)
+    {
+        long maxSearch = Math.Min(fs.Length, 22 + ushort.MaxValue);
+        long start = fs.Length - maxSearch;
+        fs.Position = start;
+        byte[] tail = new byte[(int)maxSearch];
+        fs.ReadExactly(tail);
+
+        for (int i = tail.Length - 22; i >= 0; i--)
+        {
+            if (tail[i] == 0x50 && tail[i + 1] == 0x4b && tail[i + 2] == 0x05 && tail[i + 3] == 0x06)
+            {
+                int commentLen = tail[i + 20] | (tail[i + 21] << 8);
+                if (i + 22 + commentLen == tail.Length)
+                    return start + i;
+            }
+        }
+
+        throw new InvalidOperationException("EOCD not found.");
+    }
+
+    private static void AssertAllStoredSoEntriesAre16KbAligned(string apkPath)
+    {
+        using var fs = File.OpenRead(apkPath);
+        using var mem = new Core.Utilities.Signing.FileMemory(fs);
+        mem.Position = FindEocdOffset(fs);
+        var eocd = new Core.Utilities.Signing.EndOfCentralDirectory(mem);
+
+        mem.Position = eocd.OffsetOfCD;
+        int checkedSoCount = 0;
+        for (int i = 0; i < eocd.NumberOfCDsOnDisk; i++)
+        {
+            var cd = new Core.Utilities.Signing.CentralDirectoryFileHeader(mem);
+            if (cd.FileName.EndsWith(".so", StringComparison.OrdinalIgnoreCase) && cd.CompressionMethod == 0)
+            {
+                long savedPos = mem.Position;
+                mem.Position = cd.Offset;
+                _ = new Core.Utilities.Signing.LocalFileHeader(mem);
+                long dataOffset = mem.Position;
+                mem.Position = savedPos;
+
+                Assert.True(dataOffset % 16384 == 0,
+                    $"Expected stored .so '{cd.FileName}' data offset 0x{dataOffset:X} to be 16KB-aligned (mod 16384 = {dataOffset % 16384}).");
+                checkedSoCount++;
+            }
+        }
+
+        Assert.True(checkedSoCount > 0, "Expected at least one stored .so entry in APK.");
+    }
+
+    private static void AssertApkSigningBlockHasV2AndV3(string apkPath)
+    {
+        using var fs = File.OpenRead(apkPath);
+        using var mem = new Core.Utilities.Signing.FileMemory(fs);
+        mem.Position = FindEocdOffset(fs);
+        var eocd = new Core.Utilities.Signing.EndOfCentralDirectory(mem);
+
+        long cdOffset = eocd.OffsetOfCD;
+        Assert.True(cdOffset >= 32, "CD offset too small for APK Signing Block.");
+
+        mem.Position = cdOffset - 16;
+        byte[] magic = mem.ReadBytes(16);
+        Assert.Equal("APK Sig Block 42", Encoding.ASCII.GetString(magic));
+
+        mem.Position = cdOffset - 24;
+        ulong footerSize = mem.ReadULong();
+        Assert.True((footerSize + 8) % 4096 == 0, $"Expected APK Signing Block total size ({footerSize + 8}) to be a multiple of 4096.");
+
+        long blockStart = cdOffset - (long)(footerSize + 8);
+        Assert.True(blockStart >= 0);
+        mem.Position = blockStart;
+        ulong headerSize = mem.ReadULong();
+        Assert.Equal(footerSize, headerSize);
+
+        var ids = new HashSet<uint>();
+        long pairsEnd = cdOffset - 24;
+        while (mem.Position < pairsEnd)
+        {
+            ulong pairLen = mem.ReadULong();
+            uint id = mem.ReadUInt();
+            ids.Add(id);
+            mem.Position += (long)(pairLen - 4);
+        }
+
+        Assert.Contains(0x7109871au, ids); // V2
+        Assert.Contains(0xf05368c0u, ids); // V3
+        Assert.Contains(Core.Utilities.Signing.APKSigningBlock.VERITY_PADDING_BLOCK_ID, ids); // Verity 4KB padding
     }
 }

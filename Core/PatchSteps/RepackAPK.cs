@@ -105,8 +105,11 @@ internal class RepackAPK : IPatchStep
             ZipArchiveEntry? entry = archive.GetEntry(entryPath);
             entry?.Delete();
 
-            entry = archive.CreateEntry(entryPath, CompressionLevel.Optimal);
-            using FileStream sourceStream = File.Open(file, FileMode.Open);
+            CompressionLevel level = file.EndsWith(".so", StringComparison.OrdinalIgnoreCase)
+                ? CompressionLevel.NoCompression
+                : CompressionLevel.Optimal;
+            entry = archive.CreateEntry(entryPath, level);
+            using FileStream sourceStream = File.OpenRead(file);
             using Stream entryStream = entry.Open();
             sourceStream.CopyTo(entryStream);
         }
