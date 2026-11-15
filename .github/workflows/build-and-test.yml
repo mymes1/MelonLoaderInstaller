@@ -40,6 +40,10 @@ jobs:
             exit 1
           fi
           cat "$RUNNER_TEMP/diag.log"
+          if grep -q "\[WARN\]" "$RUNNER_TEMP/diag.log"; then
+            WARN_MSG="$(grep -A1 "\[WARN\]" "$RUNNER_TEMP/diag.log" | tr '\n' ' ' | cut -c 1-3500)"
+            echo "::warning::$WARN_MSG"
+          fi
 
       - name: Upload melon_data_repaired.zip artifact
         uses: actions/upload-artifact@v4

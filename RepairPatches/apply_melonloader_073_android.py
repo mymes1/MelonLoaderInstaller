@@ -69,7 +69,7 @@ def write_early_crash_c_helper(root: Path) -> None:
 #include <ucontext.h>
 #include <unistd.h>
 
-static char g_internal_log_path[512] = {0};
+static char g_internal_log_path[512] = "/data/local/tmp/lemon_early_crash.log";
 static int g_handlers_installed = 0;
 
 static struct sigaction g_old_sigsegv;
