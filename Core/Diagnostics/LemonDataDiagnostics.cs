@@ -428,7 +428,8 @@ public static class LemonDataDiagnostics
         var mainElf = CheckArm64Elf(report, readBytes, nativePrefix + "libmain.so", "libmain.so", required: true);
         if (mainElf != null && mainElf.IsArm64 && mainBytes != null)
         {
-            bool hasProxyEarlyLog = ElfHeaderInspector.ContainsAscii(mainBytes, "lemon_early_crash.log");
+            bool hasProxyEarlyLog = ElfHeaderInspector.ContainsAscii(mainBytes, "lemon_early_crash.log")
+                || ElfHeaderInspector.ContainsUtf16(mainBytes, "lemon_early_crash.log");
             report.Checks.Add(new DiagnosticCheck(
                 "MAIN_EARLY_LOGGING",
                 "libmain.so",
@@ -444,7 +445,8 @@ public static class LemonDataDiagnostics
             // v0.7.3 NativeAOT embeds bootstrap, dobby, and plthook directly inside libmain.so
             if (mainElf != null && mainElf.IsArm64 && mainBytes != null)
             {
-                bool hasSslCertFix = ElfHeaderInspector.ContainsAscii(mainBytes, "SSL_CERT_DIR");
+                bool hasSslCertFix = ElfHeaderInspector.ContainsAscii(mainBytes, "SSL_CERT_DIR")
+                    || ElfHeaderInspector.ContainsUtf16(mainBytes, "SSL_CERT_DIR");
                 report.Checks.Add(new DiagnosticCheck(
                     "BOOTSTRAP_SSL_FIX",
                     "libmain.so (NativeAOT)",
@@ -453,7 +455,8 @@ public static class LemonDataDiagnostics
                         ? "NativeAOT libmain.so includes Android SSL_CERT_DIR fix."
                         : "NativeAOT libmain.so is missing Android SSL_CERT_DIR fix."));
 
-                bool hasEarlyCrashLog = ElfHeaderInspector.ContainsAscii(mainBytes, "lemon_early_crash.log");
+                bool hasEarlyCrashLog = ElfHeaderInspector.ContainsAscii(mainBytes, "lemon_early_crash.log")
+                    || ElfHeaderInspector.ContainsUtf16(mainBytes, "lemon_early_crash.log");
                 report.Checks.Add(new DiagnosticCheck(
                     "BOOTSTRAP_EARLY_LOGGING",
                     "libmain.so (NativeAOT)",
