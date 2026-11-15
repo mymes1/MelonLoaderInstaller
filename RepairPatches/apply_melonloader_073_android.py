@@ -1734,6 +1734,16 @@ def patch_managed_melonloader(root: Path) -> None:
     )
     write_utf8(core_path, core_text)
 
+    alc_fix_path = ml / "Fixes" / "Dotnet" / "DotnetAssemblyLoadContextFix.cs"
+    alc_fix_text = alc_fix_path.read_text(encoding="utf-8")
+    alc_fix_text = replace_once(
+        alc_fix_text,
+        "#if NET6_0_OR_GREATER",
+        "#if NET6_0_OR_GREATER && !ANDROID",
+        "MelonLoader/Fixes/Dotnet/DotnetAssemblyLoadContextFix.cs disable on Android",
+    )
+    write_utf8(alc_fix_path, alc_fix_text)
+
     # 5. MelonUtils.cs
     mu_path = ml / "MelonUtils.cs"
     mu_text = mu_path.read_text(encoding="utf-8")
