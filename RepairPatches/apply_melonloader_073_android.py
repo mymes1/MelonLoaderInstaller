@@ -377,6 +377,7 @@ def patch_bootstrap_targets_and_csproj(root: Path) -> None:
     <ItemGroup Condition="$(IsAndroid) == 'true'">
         <LinkerArg Include="-z noexecstack" />
         <LinkerArg Include="-Wl,-z,max-page-size=16384" />
+        <LinkerArg Include="-Wl,--allow-multiple-definition" />
         <LinkerArg Include="-llog" />
         <LinkerArg Include="-ldl" />
         <LinkerArg Condition="$(RuntimeIdentifier.ToLower().EndsWith('-x64'))" Include="--target=x86_64-linux-android21" />
