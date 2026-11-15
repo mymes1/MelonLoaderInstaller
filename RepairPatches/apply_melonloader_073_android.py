@@ -3243,6 +3243,12 @@ def patch_managed_melonloader(root: Path) -> None:
     core_text = core_path.read_text(encoding="utf-8")
     core_text = replace_once(
         core_text,
+        "using MonoMod.RuntimeDetour;\nusing MonoMod.RuntimeDetour.Platforms;",
+        "using MonoMod.RuntimeDetour;\n#if !ANDROID\nusing MonoMod.RuntimeDetour.Platforms;\n#endif",
+        "MelonLoader/Core.cs guard MonoMod.RuntimeDetour.Platforms on Android",
+    )
+    core_text = replace_once(
+        core_text,
         "            MelonLaunchOptions.Load();",
         "            MelonLaunchOptions.Load();\n\n"
         "#if ANDROID\n"
@@ -3694,6 +3700,16 @@ def patch_managed_melonloader(root: Path) -> None:
         "[assembly: TypeForwardedTo(typeof(MonoMod.RuntimeDetour.HookGen.HookEndpointManager))]\n"
         "#else\n" + fwd_rt_path.read_text(encoding="utf-8") + "\n#endif\n",
     )
+
+    fwd_hm_path = ml / "BackwardsCompatibility/ForwardingAttributes/0Harmony.cs"
+    fwd_hm_text = fwd_hm_path.read_text(encoding="utf-8")
+    fwd_hm_text = replace_once(
+        fwd_hm_text,
+        "[assembly: TypeForwardedTo(typeof(HarmonyLib.InlineSignature))]",
+        "#if !ANDROID\n[assembly: TypeForwardedTo(typeof(HarmonyLib.InlineSignature))]\n#endif",
+        "ForwardingAttributes/0Harmony.cs guard InlineSignature on Android",
+    )
+    write_utf8(fwd_hm_path, fwd_hm_text)
 
     fwd_ut_path = ml / "BackwardsCompatibility/ForwardingAttributes/MonoMod.Utils.cs"
     write_utf8(
